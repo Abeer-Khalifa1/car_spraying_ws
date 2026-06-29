@@ -1,0 +1,20 @@
+# car_spraying_robot workspace configuration
+# Derived from UR3_Assembly_URDF_moveit.urdf — 50 000-sample Monte Carlo FK
+# Units: metres / radians
+
+workspace:
+  x: [-0.576, 0.577]
+  y: [-0.587, 0.593]
+  z: [-0.422, 0.767]
+
+reach:
+  max: 0.580    # outermost reachable sphere radius (metres)
+  min: 0.050    # inner dead-zone radius (metres)
+
+joints:
+  joint_0: { lower: -3.14159, upper: 3.14159 }
+  joint_1: { lower: -3.14159, upper: 3.14159 }
+  joint_2: { lower: -3.14159, upper: 3.14159 }
+  joint_3: { lower: -3.14159, upper: 3.14159 }
+  joint_4: { lower: -3.14159, upper: 3.14159 }
+  joint_5: { lower: -3.14159, upper: 3.14159 }

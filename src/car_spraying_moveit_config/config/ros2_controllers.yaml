@@ -1,0 +1,31 @@
+# This config file is used by ros2_control
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - joint_0
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    # Add this to help with simulation jitter
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false  
+    allow_nonzero_velocity_at_trajectory_end: true
+    

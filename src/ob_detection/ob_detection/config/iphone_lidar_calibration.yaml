@@ -1,0 +1,52 @@
+car_parts_segmentation_spray:
+  ros__parameters:
+    camera_topic: /color_image/compressed
+    depth_topic: /depth_image
+    spiral_spacing_px: 20
+    min_path_points: 400
+    max_path_points: 600
+    brightness_threshold: 200
+    mask_alpha: 0.15
+
+    # Organized PointCloud2 source. The original 2D spiral is preserved;
+    # the mask selects matching cloud points for the saved 3D path.
+    use_point_cloud: true
+    point_cloud_topic: /pointcloud
+    point_cloud_timeout_sec: 0.35
+    publish_segmented_cloud: true
+    segmented_cloud_topic: /segmented_part_cloud
+    cloud_from_depth_fallback: true
+    enable_replica_mesh: true
+    mesh_sampling_px: 2
+    enable_mesh_coverage: true
+    spray_radius_m: 0.025
+    spray_paint_amount: 1.0
+    coverage_unpainted_thresh: 10.0
+    coverage_overpainted_thresh: 50.0
+    cloud_roi_px: 2
+    cloud_scale_x: 0.0
+    cloud_scale_y: 0.0
+    cloud_offset_x_px: 0.0
+    cloud_offset_y_px: 0.0
+    max_segmented_cloud_points: 12000
+
+    # SensorStream depth_image is 16UC1 in millimeters.
+    depth_timeout_sec: 0.35
+    depth_roi_px: 3
+    min_depth_m: 0.05
+    max_depth_m: 5.0
+
+    # Start with the iPhone color/depth images scaled by their resolutions.
+    # Tune offsets if the depth overlay is shifted relative to the RGB image.
+    # Leave scales at 0.0 to auto-compute depth_w / color_w and depth_h / color_h.
+    depth_scale_x: 0.0
+    depth_scale_y: 0.0
+    depth_offset_x_px: 0.0
+    depth_offset_y_px: 0.0
+
+    # Use your calibrated RGB intrinsics here for accurate metric X/Y.
+    # cx/cy < 0 means image center.
+    camera_fx_px: 700.0
+    camera_fy_px: 700.0
+    camera_cx_px: -1.0
+    camera_cy_px: -1.0

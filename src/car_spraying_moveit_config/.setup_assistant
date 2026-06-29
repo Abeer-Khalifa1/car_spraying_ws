@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: car_spraying_robot
+    relative_path: urdf/UR3_Assembly_URDF.urdf
+  srdf:
+    relative_path: config/car_spraying_robot.srdf
+  package_settings:
+    author_name: perry
+    author_email: perry@email.com
+    generated_timestamp: 1776032223
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity

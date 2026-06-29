@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="car_spraying_robot">
+  <link name="world"/>
+
+  <joint name="world_joint" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0 -4.44089209850063E-16 0.0475762493981301"
+        rpy="0 0 0" />
+      <mass
+        value="2.65145043916468" />
+      <inertia
+        ixx="0.00437179269564763"
+        ixy="-3.85185988877447E-34"
+        ixz="-5.87786191511011E-23"
+        iyy="0.00437179269564763"
+        iyz="3.85148667524642E-19"
+        izz="0.00438480872973141" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/base_link.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/base_link.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="link_1">
+    <inertial>
+      <origin
+        xyz="0.00511358621544344 -4.48936976482628E-09 0.063179880887965"
+        rpy="0 0 0" />
+      <mass
+        value="0.805998552978852" />
+      <inertia
+        ixx="0.00132065479666303"
+        ixy="4.40619620491933E-10"
+        ixz="-1.7219218437348E-05"
+        iyy="0.00142111571223347"
+        iyz="1.29400431944431E-10"
+        izz="0.000966507308305541" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_1.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_1.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_0"
+    type="revolute">
+    <origin
+      xyz="0 0 0.1058"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="link_1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="30.0"
+      velocity="1.5" />
+  </joint>
+  <link
+    name="link_2">
+    <inertial>
+      <origin
+        xyz="4.25462332032112E-10 0.112619000509759 -0.0693119808542058"
+        rpy="0 0 0" />
+      <mass
+        value="2.84556640407507" />
+      <inertia
+        ixx="0.0058537691504216"
+        ixy="6.57818481496509E-10"
+        ixz="-6.76159344004634E-11"
+        iyy="0.00295686823260974"
+        iyz="2.19320959807221E-05"
+        izz="0.00509129838811714" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_2.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_2.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_1"
+    type="revolute">
+    <origin
+      xyz="0.0550000000000006 0 0.0659999999999999"
+      rpy="1.5707963267949 0 -1.5707963267949" />
+    <parent
+      link="link_1" />
+    <child
+      link="link_2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="35.0"
+      velocity="1.5" />
+  </joint>
+  <link
+    name="link_3">
+    <inertial>
+      <origin
+        xyz="0.115582187515874 3.75973963073761E-09 0.0478777808983519"
+        rpy="0 0 0" />
+      <mass
+        value="1.5490639003481" />
+      <inertia
+        ixx="0.000906399541692758"
+        ixy="5.94648013847451E-10"
+        ixz="-5.89431715410645E-05"
+        iyy="0.00231873788314177"
+        iyz="1.83603569826544E-11"
+        izz="0.002197605373301" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_3.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_3.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_2"
+    type="revolute">
+    <origin
+      xyz="0 0.255 -0.0159999999999996"
+      rpy="0 0 1.5707963267949" />
+    <parent
+      link="link_2" />
+    <child
+      link="link_3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10.0"
+      velocity="2.0" />
+  </joint>
+  <link
+    name="link_4">
+    <inertial>
+      <origin
+        xyz="-0.00250614919525627 1.99867766781381E-09 0.0361958839037326"
+        rpy="0 0 0" />
+      <mass
+        value="0.305924122484251" />
+      <inertia
+        ixx="0.000192561803762394"
+        ixy="2.03197911773492E-11"
+        ixz="1.28656207934014E-06"
+        iyy="0.000281930007107716"
+        iyz="6.74791302758906E-11"
+        izz="0.000261214129591347" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_4.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.101960784313725 0.101960784313725 0.101960784313725 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_4.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_3"
+    type="revolute">
+    <origin
+      xyz="0.2245 0 0.00700000000000012"
+      rpy="-3.14159265358979 0 0" />
+    <parent
+      link="link_3" />
+    <child
+      link="link_4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="3.9"
+      velocity="2.0" />
+  </joint>
+  <link
+    name="link_5">
+    <inertial>
+      <origin
+        xyz="-3.05390690513718E-09 0.00190124611504094 0.0365748109896381"
+        rpy="0 0 0" />
+      <mass
+        value="0.335457056920106" />
+      <inertia
+        ixx="0.000353929483232228"
+        ixy="-2.6343744776887E-11"
+        ixz="-9.17112572782522E-11"
+        iyy="0.000208608865865198"
+        iyz="-4.05767367042031E-06"
+        izz="0.000332763624687152" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_5.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.101960784313725 0.101960784313725 0.101960784313725 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_5.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_4"
+    type="revolute">
+    <origin
+      xyz="0.043 0 0.0405000000000002"
+      rpy="1.5707963267949 0 1.5707963267949" />
+    <parent
+      link="link_4" />
+    <child
+      link="link_5" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="1.6"
+      velocity="2.0" />
+  </joint>
+  <link
+    name="link_6">
+    <inertial>
+      <origin
+        xyz="-3.10862446895044E-15 0.000719085206381309 0.0190838617713358"
+        rpy="0 0 0" />
+      <mass
+        value="0.320196673344857" />
+      <inertia
+        ixx="0.00011646073524573"
+        ixy="3.244441283633E-20"
+        ixz="-5.9770531959501E-20"
+        iyy="0.000114323636606439"
+        iyz="2.12683072758443E-06"
+        izz="0.000164254132094859" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_6.stl" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.101960784313725 0.101960784313725 0.101960784313725 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://car_spraying_robot/meshes/link_6.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_5"
+    type="revolute">
+    <origin
+      xyz="0 0.0530000000000008 0.0404999999999998"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="link_5" />
+    <child
+      link="link_6" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0.38"
+      velocity="2.0" />
+  </joint>
+  
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    <joint name="joint_0">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint_1">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint_2">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint_3">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint_4">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint_5">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimSystem">
+      <parameters>$(find car_spraying_moveit_config)/config/ros2_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+  
+</robot>

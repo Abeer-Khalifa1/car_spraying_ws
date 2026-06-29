@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package sensor;
+
+message Vector3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message Quaternion {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+  float w = 4;
+}
+
+message IMUData {
+  uint64 timestamp = 1;
+  Vector3 accel = 2;
+  Vector3 gyro = 3;
+  Quaternion orientation = 4;
+  string frame_id = 5;
+}
+
+message CameraData {
+  uint64 timestamp = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string encoding = 4;
+  bytes image_data = 5;
+  string frame_id = 6;
+}
+
+message DepthImage {
+  uint64 timestamp = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string encoding = 4;
+  bytes depth_data = 5;
+  string frame_id = 6;
+}
+
+// Mirrors ROS2 sensor_msgs/PointField
+message PointField {
+  string name = 1;
+  uint32 offset = 2;
+  uint32 datatype = 3;  // 1=INT8 2=UINT8 3=INT16 4=UINT16 5=INT32 6=UINT32 7=FLOAT32 8=FLOAT64
+  uint32 count = 4;
+}
+
+// Mirrors ROS2 sensor_msgs/PointCloud2
+message PointCloud2 {
+  uint64 timestamp = 1;
+  string frame_id = 2;
+  uint32 height = 3;
+  uint32 width = 4;
+  repeated PointField fields = 5;
+  bool is_bigendian = 6;
+  uint32 point_step = 7;
+  uint32 row_step = 8;
+  bytes data = 9;
+  bool is_dense = 10;
+}
+
+// GPS NavSat status (mirrors ROS2 sensor_msgs/NavSatStatus)
+message NavSatStatus {
+  int32 status = 1;   // -1=no fix, 0=fix, 1=SBAS fix, 2=GBAS fix
+  uint32 service = 2; // bitmask: 1=GPS, 2=GLONASS, 4=COMPASS, 8=GALILEO
+}
+
+// GPS fix message (mirrors ROS2 sensor_msgs/NavSatFix)
+message NavSatFix {
+  uint64 timestamp = 1;
+  string frame_id = 2;
+  NavSatStatus status = 3;
+  double latitude = 4;   // degrees
+  double longitude = 5;  // degrees
+  double altitude = 6;   // meters above WGS84 ellipsoid
+  repeated double position_covariance = 7;  // 9 values (3x3 row-major, m^2)
+  int32 position_covariance_type = 8; // 0=unknown, 1=approx, 2=diagonal, 3=known
+}
+
+message SensorMessage {
+  oneof sensor_data {
+    IMUData imu = 1;
+    CameraData camera = 2;
+    DepthImage depth = 3;
+    NavSatFix gps = 4;
+    PointCloud2 pointcloud = 5;
+  }
+}

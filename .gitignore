@@ -1,0 +1,22 @@
+# ROS build files
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# CLion
+.idea/
+
+# Compiled files
+*.o
+*.so
+
+# Temporary files
+*.swp
+

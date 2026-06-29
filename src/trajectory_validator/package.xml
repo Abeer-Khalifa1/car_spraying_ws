@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>trajectory_validator</name>
+  <version>1.0.0</version>
+  <description>
+    Validates and visualises Cartesian trajectory CSVs against the
+    reachable workspace of car_spraying_robot (UR3-like 6-DOF arm).
+
+    Provides:
+      - trajectory_validator_node  (ROS 2 node, MarkerArray for RViz2)
+      - validate_trajectory        (standalone CLI + Python library)
+      - visualize_workspace        (matplotlib 3-D viewer)
+  </description>
+
+  <maintainer email="you@example.com">You</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- ROS 2 runtime deps -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>rcl_interfaces</depend>
+
+  <!-- Python runtime deps -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
