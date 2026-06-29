@@ -770,8 +770,20 @@ int main(int argc, char * argv[])
   // Load CSV
   // =========
 
-  std::string file_path =
-    "/home/user/car_spraying_ws/src/square_trajectory/peya.csv"; // Trajectory excel path
+  // csv_path is injected by filter_and_forward at launch time (peya_validated.csv).
+  // Falls back to the original peya.csv when run without the validator.
+  // Override at runtime: --ros-args -p csv_path:=/path/to/peya_validated.csv
+  std::string file_path = node->has_parameter("csv_path")
+    ? node->get_parameter("csv_path").as_string()
+    : std::string{};
+
+  if (file_path.empty()) {
+    file_path = "/home/user/car_spraying_ws/src/square_trajectory/peya.csv";
+    RCLCPP_WARN(node->get_logger(),
+      "csv_path parameter not set — falling back to default: %s", file_path.c_str());
+  }
+
+  RCLCPP_INFO(node->get_logger(), "Loading CSV: %s", file_path.c_str());
   std::ifstream file(file_path);
 
   if (!file.is_open()) {

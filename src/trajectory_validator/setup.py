@@ -42,6 +42,9 @@ setup(
             'trajectory_validator.validate_trajectory:main',
             'visualize_workspace     = '
             'trajectory_validator.visualize_workspace:main',
+            # Filter + forward: validate peya.csv, strip unsafe points, hand off to square_xz
+            'filter_and_forward      = '
+            'trajectory_validator.filter_and_forward:main',
         ],
     },
 )
