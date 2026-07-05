@@ -1,31 +1,11 @@
 #!/usr/bin/env python3
-"""
-validate_trajectory.py  —  Standalone CLI
-==========================================
-Validate a Cartesian trajectory CSV against car_spraying_robot's workspace.
-
-Usage
------
-    # report only
-    ros2 run trajectory_validator validate_trajectory --ros-args -p csv_path:=/path/to.csv
-
-    # OR run standalone (no ROS required):
-    python3 validate_trajectory.py input.csv [--output safe.csv] [--clamp] [--quiet]
-
-Exit codes
-----------
-  0  all points within workspace
-  1  one or more points outside workspace
-  2  input error (file not found, bad CSV …)
-"""
 
 from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
 
-# When run inside a ROS 2 workspace the package is importable normally.
-# When run as a plain script, add the package directory to sys.path.
+
 try:
     from trajectory_validator.robot_workspace import (
         WORKSPACE_AABB, MAX_REACH, MIN_REACH, check_point, clamp_point)
@@ -37,8 +17,6 @@ except ImportError:
         WORKSPACE_AABB, MAX_REACH, MIN_REACH, check_point, clamp_point)
     from trajectory_validator.csv_loader import load_csv, save_csv
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 
 def validate(
     input_csv: str,
@@ -137,8 +115,6 @@ def validate(
         'violations_by_row': violations_by_row,
     }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(

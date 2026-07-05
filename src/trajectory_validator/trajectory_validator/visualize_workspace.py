@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""
-visualize_workspace.py  —  Standalone matplotlib viewer (no ROS required)
-=========================================================================
-Plots the robot's reachable workspace as an FK point cloud and overlays
-a trajectory CSV (green = safe, red X = unsafe).
-
-Usage
------
-    # Workspace cloud only
-    python3 visualize_workspace.py
-
-    # With trajectory overlay
-    python3 visualize_workspace.py trajectory.csv
-
-    # Save PNG instead of opening a window
-    python3 visualize_workspace.py trajectory.csv workspace.png
-
-    # Via ros2 run
-    ros2 run trajectory_validator visualize_workspace trajectory.csv
-"""
 
 from __future__ import annotations
 import sys
@@ -46,8 +26,6 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Rectangle, Polygon
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _draw_aabb_3d(ax) -> None:
     xl, xh = WORKSPACE_AABB['x']

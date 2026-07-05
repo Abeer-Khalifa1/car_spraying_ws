@@ -1,21 +1,6 @@
-"""
-robot_workspace.py
-==================
-Shared workspace definition and kinematics for car_spraying_robot.
-Derived from UR3_Assembly_URDF_moveit.urdf via 50 000-sample Monte Carlo FK.
-
-This module is intentionally ROS-free so it can be used in standalone
-scripts, unit tests, and the ROS 2 node alike.
-"""
-
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-# ──────────────────────────────────────────────────────────────────────────────
-# JOINT CHAIN  (6 revolute joints, parsed from URDF)
-# Each entry: child-frame origin (xyz) and orientation (rpy) relative to
-# the parent, plus the joint rotation axis in the child frame.
-# ──────────────────────────────────────────────────────────────────────────────
 
 JOINTS: list[dict] = [
     {'xyz': np.array([0.0000,  0.0000,  0.1058]), 'rpy': np.array([0.0,    0.0,     0.0   ]), 'axis': np.array([0, 0, 1])},  # joint_0
@@ -76,15 +61,6 @@ def sample_workspace(n: int = 8_000, seed: int = 0) -> np.ndarray:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def check_point(x: float, y: float, z: float) -> tuple[bool, list[str]]:
-    """
-    Three-layer check:
-      1. Axis-aligned bounding box
-      2. Max spherical reach
-      3. Min (dead-zone) reach
-
-    Returns (is_safe, violations).
-    violations is an empty list when is_safe is True.
-    """
     violations: list[str] = []
 
     for axis, val in (('x', x), ('y', y), ('z', z)):

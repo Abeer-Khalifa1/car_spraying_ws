@@ -1,33 +1,4 @@
 #!/usr/bin/env python3
-"""
-trajectory_validator_node.py
-=============================
-ROS 2 (Jazzy) node — validates a Cartesian trajectory CSV against the
-reachable workspace of car_spraying_robot and publishes markers for RViz2.
-
-Published topics
-----------------
-~/trajectory_markers   visualization_msgs/msg/MarkerArray
-    GREEN  sphere  = waypoint inside workspace
-    RED    sphere  = waypoint outside workspace
-    GREEN  line    = path through safe waypoints
-    ORANGE cube    = workspace AABB (semi-transparent)
-
-~/workspace_sphere     visualization_msgs/msg/Marker
-    Transparent sphere at max-reach radius
-
-Services
---------
-~/reload   std_srvs/srv/Trigger
-    Reloads the CSV from the current 'csv_path' parameter.
-
-Parameters
-----------
-csv_path   (string, default '')         — path to trajectory CSV
-frame_id   (string, default 'base_link')
-rate_hz    (double, default 1.0)        — marker republish rate
-clamp      (bool,   default false)      — log clamped position alongside violation
-"""
 
 import os
 import rclpy

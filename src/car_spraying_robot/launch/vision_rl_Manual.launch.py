@@ -1,33 +1,3 @@
-"""
-vision_rl_Manual.launch.py
-===========================
-Launches the robot stack + RViz and publishes part_mesh.ply and
-part_mesh_coverage.ply as RViz Marker messages so you can inspect
-the saved meshes alongside the robot model.
-
-  RSP + static TF  →  RViz  →  ply_marker_publisher (Python node)
-
-No MoveGroup or controllers needed — this is a viewer only.
-
-Usage (defaults resolve automatically if files exist at the standard path):
-  ros2 launch car_spraying_robot vision_rl_Manual.launch.py
-
-Override paths explicitly if the files live elsewhere:
-  ros2 launch car_spraying_robot vision_rl_Manual.launch.py \
-      mesh_ply:=/abs/path/to/part_mesh.ply \
-      coverage_ply:=/abs/path/to/part_mesh_coverage.ply \
-      mesh_frame:=camera_color_optical_frame
-
-FIX — what changed vs the original:
-  1. _resolve_ply_path() searches several candidate directories so the
-     default value is always a file that actually exists on disk.
-     A clear error is raised at launch time (not silently at node start)
-     when neither path can be found.
-  2. old-style static_transform_publisher arguments replaced with the
-     new --frame-id / --child-frame-id form to silence the deprecation
-     warning seen in the original log.
-"""
-
 import glob
 import os
 

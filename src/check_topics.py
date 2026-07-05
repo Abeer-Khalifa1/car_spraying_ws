@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Quick ROS2 topic diagnostic tool."""
 
 import rclpy
 from rclpy.node import Node

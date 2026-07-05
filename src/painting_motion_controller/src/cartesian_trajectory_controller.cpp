@@ -200,24 +200,40 @@ static bool execute_cartesian_segment(
 {
   if (segment.empty()) return false;
 
+  move_group.setStartStateToCurrentState();
+
   moveit_msgs::msg::RobotTrajectory traj;
   double fraction = move_group.computeCartesianPath(
-    segment, 0.01, traj, true);
+    segment, 0.01, jump_threshold, traj, true);
 
   RCLCPP_INFO(logger, "Cartesian fraction = %.2f", fraction);
 
+  bool path_ok = true;
   if (fraction >= fraction_min) {
     if (trajectory_is_singular(move_group, traj, logger,
                                singularity_pub, manipulability_pub))
     {
       RCLCPP_WARN(logger, "Trajectory appears singular — attempting avoidance.");
+      path_ok = false;
+    }
+  } else {
+    RCLCPP_WARN(logger,
+      "Fraction %.2f below %.2f — path incomplete, attempting singularity/IK avoidance.",
+      fraction, fraction_min);
+    path_ok = false;
+  }
 
-      std::vector<double> deltas = { -0.10, -0.05, 0.05, 0.10 };
+  if (!path_ok) {
+      std::vector<double> deltas = { -0.25, -0.15, -0.10, -0.05, 0.05, 0.10, 0.15, 0.25 };
       bool found_alternative = false;
       moveit_msgs::msg::RobotTrajectory alt_traj;
       double alt_fraction = 0.0;
+      const double retry_jump_threshold = std::max(jump_threshold, 0.10);
+      const double eef_step = 0.01;
 
       for (double d : deltas) {
+        move_group.setStartStateToCurrentState();
+
         std::vector<geometry_msgs::msg::Pose> perturbed;
         perturbed.reserve(segment.size());
         for (const auto & p : segment) {
@@ -234,7 +250,7 @@ static bool execute_cartesian_segment(
 
         moveit_msgs::msg::RobotTrajectory try_traj;
         double try_fraction = move_group.computeCartesianPath(
-          perturbed, 0.01, try_traj, true);
+          perturbed, eef_step, retry_jump_threshold, try_traj, true);
 
         RCLCPP_INFO(logger,
           "Tried perturbation %.3f — fraction=%.2f", d, try_fraction);
@@ -250,15 +266,38 @@ static bool execute_cartesian_segment(
         }
       }
 
+      if (!found_alternative && !segment.empty()) {
+        move_group.setStartStateToCurrentState();
+        std::vector<geometry_msgs::msg::Pose> relaxed = segment;
+        auto current_pose = move_group.getCurrentPose().pose;
+        relaxed.front().orientation = current_pose.orientation;
+
+        moveit_msgs::msg::RobotTrajectory try_traj;
+        double try_fraction = move_group.computeCartesianPath(
+          relaxed, eef_step, retry_jump_threshold, try_traj, true);
+
+        RCLCPP_INFO(logger,
+          "Tried relaxed first waypoint orientation — fraction=%.2f", try_fraction);
+
+        if (try_fraction >= fraction_min) {
+          if (!trajectory_is_singular(move_group, try_traj, logger,
+                                      singularity_pub, manipulability_pub)) {
+            found_alternative = true;
+            alt_traj = try_traj;
+            alt_fraction = try_fraction;
+          }
+        }
+      }
+
       if (found_alternative) {
         RCLCPP_INFO(logger,
           "Found alternative non-singular path (fraction %.2f).", alt_fraction);
         traj = alt_traj;
       } else {
-        RCLCPP_WARN(logger, "Trajectory rejected due to singularity.");
+        RCLCPP_WARN(logger, "Trajectory rejected due to singularity / IK failure.");
         return false;
       }
-    }
+  }
 
 
     // Constant end-effector speed retiming 
@@ -341,12 +380,6 @@ static bool execute_cartesian_segment(
     RCLCPP_WARN(logger, "Execution failed (error %d)", result.val);
     return false;
   }
-
-  RCLCPP_WARN(logger,
-    "Fraction %.2f below %.2f — singularity, skipping segment.",
-    fraction, fraction_min);
-  return false;
-}
 // ==============================================================
 //  Build correction waypoints perpendicular to a surface normal 
 // ==============================================================
@@ -413,6 +446,7 @@ static bool execute_rl_path(
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr spray_pub,
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr singularity_pub,
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr manipulability_pub,
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr planning_failed_pub,
   const std::vector<geometry_msgs::msg::PoseStamped> & path_poses,
   const std::atomic<bool> & spray_enabled,
   double jump_threshold,
@@ -428,28 +462,37 @@ static bool execute_rl_path(
   // ── Approach the first waypoint with spray OFF ─────────────────────────
   set_spray(spray_pub, logger, false, spray_enabled);
 
-  auto current_pose = move_group.getCurrentPose().pose;
+  // ---------------------------------------------------------
+  // 1. FREE-SPACE APPROACH MOVE (Do not use Cartesian for this)
+  // ---------------------------------------------------------
+  RCLCPP_INFO(logger, "Planning free-space approach to patch start...");
 
-  std::vector<geometry_msgs::msg::Pose> approach_seg = {
-    current_pose, path_poses.front().pose
-  };
-  moveit_msgs::msg::RobotTrajectory approach_traj;
-  double approach_frac = move_group.computeCartesianPath(
-    approach_seg, 0.01, approach_traj, true);
+  // Clear any old targets and ensure we start from reality
+  move_group.clearPoseTargets();
+  move_group.setStartStateToCurrentState();
 
-  moveit::core::MoveItErrorCode approach_result;
-  if (approach_frac >= fraction_min) {
-    approach_result = move_group.execute(approach_traj);
+  // Set the target to the very first point of the 256-waypoint patch
+  move_group.setPoseTarget(path_poses.front().pose);
+
+  moveit::planning_interface::MoveGroupInterface::Plan approach_plan;
+  auto plan_result = move_group.plan(approach_plan);
+
+  if (plan_result == moveit::core::MoveItErrorCode::SUCCESS) {
+    RCLCPP_INFO(logger, "Approach plan found. Executing...");
+    move_group.execute(approach_plan);
+
+    // Give the physical/simulated robot a tiny moment to settle
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   } else {
-    move_group.setPoseTarget(path_poses.front().pose);
-    approach_result = move_group.move();
-  }
-
-  if (approach_result != moveit::core::MoveItErrorCode::SUCCESS) {
-    RCLCPP_WARN(logger,
-      "execute_rl_path: could not reach first waypoint — aborting path.");
+    RCLCPP_WARN(logger, "Failed to plan free-space approach. Target is unreachable.");
+    std_msgs::msg::Bool pf_msg; pf_msg.data = true;
+    planning_failed_pub->publish(pf_msg);
     return false;
   }
+
+  // ---------------------------------------------------------
+  // 2. CARTESIAN GRID EXECUTION
+  // ---------------------------------------------------------
 
   // ── Extract plain Pose vector ──────────────────────────────────────────
   std::vector<geometry_msgs::msg::Pose> poses;
@@ -468,6 +511,9 @@ static bool execute_rl_path(
   // ── Spray OFF when done ────────────────────────────────────────────────
   // Use force-OFF so it always fires regardless of gate state.
   set_spray_force(spray_pub, logger, false);
+
+  std_msgs::msg::Bool pf_msg; pf_msg.data = !ok;
+  planning_failed_pub->publish(pf_msg);
 
   if (ok)
     RCLCPP_INFO(logger,
@@ -488,6 +534,7 @@ static int drain_rl_corrections(
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr spray_pub,
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr singularity_pub,
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr manipulability_pub,
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr planning_failed_pub,
   std::queue<geometry_msgs::msg::Point> & rl_target_queue,
   std::mutex & rl_queue_mutex,
   std::atomic<float> & rl_standoff,
@@ -571,6 +618,8 @@ static int drain_rl_corrections(
     if (approach_result != moveit::core::MoveItErrorCode::SUCCESS) {
       RCLCPP_WARN(logger,
         "Could not reach adaptive correction approach point — skipping.");
+      std_msgs::msg::Bool pf_msg; pf_msg.data = true;
+      planning_failed_pub->publish(pf_msg);
       set_spray(spray_pub, logger, true, spray_enabled);
       continue;
     }
@@ -580,6 +629,9 @@ static int drain_rl_corrections(
     bool ok = execute_cartesian_segment(
       move_group, correction_waypoints, jump_threshold, fraction_min,
       ee_speed, logger, singularity_pub, manipulability_pub);
+
+    std_msgs::msg::Bool pf_msg; pf_msg.data = !ok;
+    planning_failed_pub->publish(pf_msg);
 
     if (ok)
       RCLCPP_INFO(logger, "  ✓ Adaptive correction stroke executed.");
@@ -728,6 +780,15 @@ int main(int argc, char * argv[])
   auto manipulability_pub =
     node->create_publisher<std_msgs::msg::Float64>("/manipulability", 10);
 
+  // /spray/planning_failed — fires whenever MoveIt could not plan/execute a
+  // requested motion (unreachable target, IK failure, execution rejected)
+  // for a reason OTHER than the singularity check above. This is the signal
+  // rl_agent_node.py needs to learn "don't ask for that pose again" instead
+  // of just watching PASS 2 quietly time out. Non-latched: the RL node
+  // treats it as a sticky "seen since last decision step" event.
+  auto planning_failed_pub =
+    node->create_publisher<std_msgs::msg::Bool>("/spray/planning_failed", 10);
+
   // /spray/pass1_done  — latched Bool that rl_agent_node waits for
   auto pass1_done_pub = node->create_publisher<std_msgs::msg::Bool>(
     "/spray/pass1_done",
@@ -749,8 +810,17 @@ int main(int argc, char * argv[])
   moveit::planning_interface::MoveGroupInterface move_group(node, "car_spraying_arm");
   move_group.setPoseReferenceFrame("world");
   move_group.setEndEffectorLink("link_6");
-  move_group.setPlanningTime(5.0);
+  move_group.setPlanningTime(1.0);
   move_group.setNumPlanningAttempts(5);
+
+  // Spraying doesn't need millimeter/sub-degree exactness on the nozzle
+  // pose — MoveIt's defaults (~0.0001 m / ~0.001 rad) are tight enough
+  // that many poses with a perfectly good *nearby* IK solution get
+  // rejected outright ("Unable to sample any valid states for goal
+  // tree"), which looks like "unreachable" but is really "no exact
+  // solution, and we never asked it to consider a close one."
+  move_group.setGoalPositionTolerance(0.01);      // 1 cm
+  move_group.setGoalOrientationTolerance(0.05);   // ~2.9 degrees
   move_group.setMaxVelocityScalingFactor(0.1);
   move_group.setMaxAccelerationScalingFactor(0.1);
 
@@ -961,6 +1031,7 @@ int main(int argc, char * argv[])
       geometry_msgs::msg::Point last_target;
       int pre_corrections = drain_rl_corrections(
         move_group, spray_pub, singularity_pub, manipulability_pub,
+        planning_failed_pub,
         rl_target_queue, rl_queue_mutex,
         rl_standoff, rl_flow, spray_enabled,
         node->get_logger(),
@@ -1020,6 +1091,7 @@ int main(int argc, char * argv[])
 
       drain_rl_corrections(
         move_group, spray_pub, singularity_pub, manipulability_pub,
+        planning_failed_pub,
         rl_target_queue, rl_queue_mutex,
         rl_standoff, rl_flow, spray_enabled,
         node->get_logger(),
@@ -1050,12 +1122,19 @@ int main(int argc, char * argv[])
   // PASS 2 — RL correction loop  (skipped if no RL agent)
   // ======================================================
 
-  const int  MAX_CORRECTION_PASSES = 50;
+  // MAX_CORRECTION_PASSES now counts ONLY real /spray/rl_path executions
+  // (see fix below). Previously it also counted legacy /spray/rl_target
+  // Point drains, which silently ate the whole budget — field log showed
+  // "RL path executions: 11  total corrections: 51", i.e. ~40 of 50 slots
+  // were burned by the legacy queue before real work got a fair share.
+  // Raised from 50 -> 200 now that the count is honest.
+  const int  MAX_CORRECTION_PASSES = 200;
   const int  RL_DETECT_TIMEOUT_MS  = 5000;   // 5 s to detect the RL agent
   const int  RL_IDLE_TIMEOUT_MS    = 8000;   // exit after 8 s of no work
 
-  int correction_count   = 0;
-  int rl_path_executions = 0;
+  int correction_count        = 0;   // real /spray/rl_path executions only
+  int legacy_correction_count = 0;   // reported separately, does not gate the cap
+  int rl_path_executions      = 0;
 
   // Probe: wait for RL agent heartbeat on /spray/enable
   RCLCPP_INFO(node->get_logger(),
@@ -1104,6 +1183,7 @@ int main(int argc, char * argv[])
           bool ok = execute_rl_path(
             move_group,
             spray_pub, singularity_pub, manipulability_pub,
+            planning_failed_pub,
             path_snapshot, spray_enabled,
             jump_threshold, fraction_min, desired_ee_speed,
             node->get_logger());
@@ -1136,13 +1216,14 @@ int main(int argc, char * argv[])
         if (legacy_has_work) {
           int drained = drain_rl_corrections(
             move_group, spray_pub, singularity_pub, manipulability_pub,
+            planning_failed_pub,
             rl_target_queue, rl_queue_mutex,
             rl_standoff, rl_flow, spray_enabled,
             node->get_logger(),
             jump_threshold, fraction_min, desired_ee_speed,
             MAX_INLINE_CORRECTIONS, surface_waypoints);
 
-          correction_count += drained;
+          legacy_correction_count += drained;
           if (drained > 0) {
             did_work = true;
             idle_start = std::chrono::steady_clock::now();
@@ -1174,11 +1255,12 @@ int main(int argc, char * argv[])
 
     if (correction_count >= MAX_CORRECTION_PASSES)
       RCLCPP_WARN(node->get_logger(),
-        "Reached MAX_CORRECTION_PASSES (%d). Stopping.", MAX_CORRECTION_PASSES);
+        "Reached MAX_CORRECTION_PASSES (%d real rl_path executions). Stopping PASS 2.",
+        MAX_CORRECTION_PASSES);
     else
       RCLCPP_INFO(node->get_logger(),
-        "PASS 2 complete -- %d iterations (%d rl_path).",
-        correction_count, rl_path_executions);
+        "PASS 2 complete -- %d real rl_path executions, %d legacy drains.",
+        correction_count, legacy_correction_count);
 
   }  // end if (rl_agent_detected)
 

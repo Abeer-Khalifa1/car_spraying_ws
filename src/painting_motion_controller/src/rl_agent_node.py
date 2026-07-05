@@ -1,69 +1,4 @@
 #!/usr/bin/env python3
-"""
-rl_agent_node.py  —  Closed-Loop Autonomous Painting RL Agent
-==============================================================
-
-Algorithm stack
----------------
-  PRIMARY  : PPO  (Proximal Policy Optimisation)
-             Acts from step 1.  Handles the full continuous action space
-             without needing a warm replay buffer.  Stable on CPU.
-
-  SECONDARY: TD3  (Twin Delayed Deep Deterministic Policy Gradient)
-             Accumulates a persistent replay buffer across sessions.
-             Starts blending its policy into decisions once the buffer
-             holds >= TD3_WARMUP_STEPS transitions.  More sample-efficient
-             than PPO once trained; deterministic so easy to audit.
-
-  ENSEMBLE : weighted blend  ppo_weight * PPO_action + td3_weight * TD3_action
-             td3_weight grows from 0 → 0.5 as the buffer fills past warmup.
-             Keeps PPO as the safety net while TD3 specialises.
-
-Observation space (continuous, shape = OBS_DIM = 8):
-  [0] fraction of unpainted cells      (0-1)
-  [1] fraction of weak cells           (0-1)
-  [2] fraction of good cells           (0-1)
-  [3] fraction of overspray cells      (0-1)
-  [4] fraction of uneven cells         (0-1)
-  [5] mean thickness (normalised 0-1 over [0, MAX_THICKNESS*2])
-  [6] std  thickness (normalised 0-1)
-  [7] gradient RMS   (normalised 0-1 over [0, UNEVEN_GRADIENT_THRESH*2])
-
-Action space (continuous, shape = ACT_DIM = 4):
-  [0] standoff_distance  (clamped → [STANDOFF_MIN, STANDOFF_MAX])
-  [1] spray_flow_rate    (clamped → [0, 1])
-  [2] target_y_norm      (clamped → [0, 1] → mapped to [y_min, y_max])
-  [3] target_z_norm      (clamped → [0, 1] → mapped to [z_min, z_max])
-
-  The RL agent now directly decides WHERE on the wall to paint, not just
-  which preset parameter combination to use.  The boustrophedon path is
-  generated around the chosen (target_y, target_z) centroid.
-
-Reward (per decision step):
-  +200 * good_frac
-  - 80 * unpainted_frac
-  - 60 * over_frac
-  - 40 * uneven_frac
-  - 20 * weak_frac
-  shaped so total ∈ [-200, +200].
-
-Topics
-------
-Subscribes:
-  /spray/thickness_matrix   (Float32MultiArray)
-  /spray/pass1_done         (Bool, TRANSIENT_LOCAL) — published by square_xz.cpp
-  /spray/tracking_pose      (PoseStamped) — EE pose from square_xz.cpp tracking thread;
-                             orientation encodes the local surface normal (tool-Z = normal)
-
-Publishes:
-  /spray/rl_action          (Float32MultiArray)   [standoff, flow]
-  /spray/rl_path            (Path)                boustrophedon raster
-  /spray/rl_target          (Point)               legacy compat.
-  /spray/enable             (Bool, TRANSIENT_LOCAL)
-  /spray/reward             (Float32)
-  /spray/defect_markers     (MarkerArray)
-  /spray/rl_status          (String)
-"""
 
 import rclpy
 from rclpy.node import Node
@@ -76,7 +11,7 @@ import math
 import os
 import collections
 
-from std_msgs.msg import Float32, Float32MultiArray, String, Bool
+from std_msgs.msg import Float32, Float32MultiArray, String, Bool, Float64
 from geometry_msgs.msg import Point, PoseStamped, Pose
 from nav_msgs.msg import Path
 from visualization_msgs.msg import Marker, MarkerArray
@@ -164,9 +99,9 @@ OBS_DIM  = 8
 ACT_DIM  = 4
 HIDDEN   = 64
 
-# Physical limits — mirror square_xz.cpp
+# Physical limits — mirror cartesian_trajectory_controller.cpp
 STANDOFF_MIN = 0.15
-STANDOFF_MAX = 0.25   # matches square_xz.cpp STANDOFF_MAX clamp
+STANDOFF_MAX = 0.25   # matches cartesian_trajectory_controller.cpp STANDOFF_MAX clamp
 
 # Thickness classification thresholds
 MIN_THICKNESS          = 25.0
@@ -186,9 +121,7 @@ PATCH_STEP       = 0.02   # row spacing
 DECISION_INTERVAL = 3.0   # seconds
 
 # Default surface normal — overridden at runtime from tracking pose / CSV geometry.
-# square_xz.cpp computes standoff offsets along each waypoint's local surface normal,
-# so we must do the same.  These defaults match a flat +X-facing surface but the
-# node updates them from /spray/tracking_pose each decision step.
+
 DEFAULT_SURFACE_NX = 1.0
 DEFAULT_SURFACE_NY = 0.0
 DEFAULT_SURFACE_NZ = 0.0
@@ -673,10 +606,10 @@ class RLAgentNode(Node):
         super().__init__('rl_agent')
 
         # ── Grid parameters ──────────────────────────────────────────────
-        self.declare_parameter('y_min',      -1.0)
-        self.declare_parameter('y_max',       1.0)
-        self.declare_parameter('z_min',       0.0)
-        self.declare_parameter('z_max',       1.5)
+        self.declare_parameter('y_min',      -0.20)
+        self.declare_parameter('y_max',       0.00)
+        self.declare_parameter('z_min',       0.45)
+        self.declare_parameter('z_max',       0.70)
         self.declare_parameter('resolution',  0.02)
 
         self.y_min = self.get_parameter('y_min').value
@@ -695,7 +628,7 @@ class RLAgentNode(Node):
         self._pass1_done = False
 
         # ── EE tracking ─────────────────────────────────────────────────
-        # Latest EE pose received from /spray/tracking_pose (square_xz.cpp)
+        # Latest EE pose received from /spray/tracking_pose (cartesian_trajectory_controller.cpp)
         self._current_ee_pose: Pose | None = None
         self._tracking_lock = threading.Lock()
 
@@ -710,6 +643,32 @@ class RLAgentNode(Node):
         self._prev_action = None
         self._episode_step = 0
         self._total_reward = 0.0
+
+        # ── Singularity / manipulability health ─────────────────────────────
+        # cartesian_trajectory_controller.cpp ALREADY publishes these two topics every time it
+        # runs the Jacobian-SVD singularity check (see trajectory_is_singular
+        # in cartesian_trajectory_controller.cpp) — but nothing was subscribing to them before,
+        # so the RL agent had no idea when its proposed correction had been
+        # rejected for being near-singular. This closes that loop.
+        #   /singularity_warning (Bool)    -> True the moment a segment gets
+        #                                      rejected outright
+        #   /manipulability (Float64)      -> smallest Jacobian singular
+        #                                      value seen; cartesian_trajectory_controller.cpp's
+        #                                      own threshold is 0.01
+        self._MANIP_THRESHOLD = 0.01   # mirrors MANIP_THRESHOLD in cartesian_trajectory_controller.cpp
+        self._last_manipulability = None
+        self._singularity_seen = False
+        self._ik_penalty = 0.0
+
+        # ── Planning failure feedback ────────────────────────────────────────
+        # cartesian_trajectory_controller.cpp now publishes /spray/planning_failed=True whenever
+        # MoveIt could not plan or execute a requested motion for a reason
+        # OTHER than the singularity check above (unreachable target from
+        # setPoseTarget()+plan(), rejected execution, etc). Without this,
+        # the RL agent could keep re-choosing an out-of-workspace target
+        # every decision step and never learn why nothing painted.
+        self._planning_failed_seen = False
+        self._planning_penalty = 0.0
 
         # ── QoS ──────────────────────────────────────────────────────────
         _tl_qos = rclpy.qos.QoSProfile(
@@ -730,6 +689,26 @@ class RLAgentNode(Node):
         self.create_subscription(
             PoseStamped, '/spray/tracking_pose',
             self._tracking_pose_cb,
+            rclpy.qos.qos_profile_sensor_data)
+
+        # These are already published live by cartesian_trajectory_controller.cpp — see
+        # trajectory_is_singular() there. No C++ changes needed.
+        self.create_subscription(
+            Bool, '/singularity_warning',
+            self._singularity_cb,
+            rclpy.qos.qos_profile_sensor_data)
+
+        self.create_subscription(
+            Float64, '/manipulability',
+            self._manipulability_cb,
+            rclpy.qos.qos_profile_sensor_data)
+
+        # Fires on any MoveIt planning/execution failure that ISN'T a
+        # singularity (unreachable pose, rejected IK, etc) — see
+        # execute_rl_path() / drain_rl_corrections() in cartesian_trajectory_controller.cpp.
+        self.create_subscription(
+            Bool, '/spray/planning_failed',
+            self._planning_failed_cb,
             rclpy.qos.qos_profile_sensor_data)
 
         # ── Publishers ───────────────────────────────────────────────────
@@ -803,6 +782,47 @@ class RLAgentNode(Node):
             self._pass1_done = True
             self.get_logger().info('PASS 1 complete — RL agent now active.')
 
+    def _singularity_cb(self, msg: Bool):
+        # Sticky within a decision interval — trajectory_is_singular() in
+        # cartesian_trajectory_controller.cpp fires many times per corrective segment; we only
+        # need to know if ANY of them tripped since our last decision step.
+        if msg.data:
+            self._singularity_seen = True
+
+    def _planning_failed_cb(self, msg: Bool):
+        # Sticky within a decision interval, same pattern as
+        # _singularity_cb — cartesian_trajectory_controller.cpp may fire this several times
+        # per decision step (approach failure, then execution failure).
+        if msg.data:
+            self._planning_failed_seen = True
+
+    def _manipulability_cb(self, msg: Float64):
+        # Track the worst (smallest) manipulability seen since the last
+        # decision step, since that's what cartesian_trajectory_controller.cpp actually gates on.
+        if self._last_manipulability is None:
+            self._last_manipulability = float(msg.data)
+        else:
+            self._last_manipulability = min(self._last_manipulability, float(msg.data))
+
+    def _consume_ik_penalty(self) -> float:
+        penalty = 0.0
+        if self._singularity_seen:
+            penalty = 100.0
+        elif self._last_manipulability is not None:
+            warn_zone = 5.0 * self._MANIP_THRESHOLD   # 0.05
+            if self._last_manipulability < warn_zone:
+                frac = (warn_zone - self._last_manipulability) / warn_zone
+                penalty = 30.0 * float(np.clip(frac, 0.0, 1.0))
+
+        self._singularity_seen = False
+        self._last_manipulability = None
+        return penalty
+
+    def _consume_planning_penalty(self) -> float:
+        penalty = 150.0 if self._planning_failed_seen else 0.0
+        self._planning_failed_seen = False
+        return penalty
+
     # ─────────────────────────────────────────────────────────
     #  OBSERVATION BUILDER
     # ─────────────────────────────────────────────────────────
@@ -834,10 +854,11 @@ class RLAgentNode(Node):
     #  REWARD
     # ─────────────────────────────────────────────────────────
 
-    def _compute_reward(self, obs: np.ndarray) -> float:
+    def _compute_reward(self, obs: np.ndarray, ik_penalty: float = 0.0) -> float:
         unpainted, weak, good, over, uneven = obs[0], obs[1], obs[2], obs[3], obs[4]
         reward = (good * 200.0 - unpainted * 80.0 - over * 60.0
-                  - uneven * 40.0 - weak * 20.0)
+                  - uneven * 40.0 - weak * 20.0
+                  - ik_penalty)
         return float(reward)
 
     # ─────────────────────────────────────────────────────────
@@ -915,15 +936,6 @@ class RLAgentNode(Node):
     # ─────────────────────────────────────────────────────────
 
     def _surface_normal_from_ee(self):
-        """
-        Recover the outward surface normal from the latest /spray/tracking_pose.
-
-        square_xz.cpp publishes tracking_pose with orientation = pose_from_surface()
-        quaternion, where tool-Z points along the surface normal (nx, ny, nz).
-        We reconstruct tool-Z from the quaternion using the standard rotation:
-            n = R * [0, 0, 1]^T
-        Returns (nx, ny, nz) — falls back to default +X normal if no pose yet.
-        """
         with self._tracking_lock:
             ee_pose = self._current_ee_pose
 
@@ -947,15 +959,6 @@ class RLAgentNode(Node):
                      standoff: float,
                      nx: float, ny: float, nz: float,
                      stamp) -> list:
-        """
-        Boustrophedon raster poses for one patch centred on (target_y, target_z).
-
-        Nozzle position mirrors square_xz.cpp pose_from_surface():
-            nozzle = surface_point - standoff * normal
-        where surface_point.x is recovered as EE.x + standoff * nx (i.e. the
-        EE is already at standoff from the surface, so adding standoff*n back
-        gives the surface contact point).
-        """
         with self._tracking_lock:
             ee_pose = self._current_ee_pose
 
@@ -981,7 +984,7 @@ class RLAgentNode(Node):
             left_to_right = not left_to_right
 
             for y in y_vals:
-                # Same formula as pose_from_surface() in square_xz.cpp
+                # Same formula as pose_from_surface() in cartesian_trajectory_controller.cpp
                 nozzle_x = surface_x   - standoff * nx
                 nozzle_y = float(y)    - standoff * ny
                 nozzle_z = float(z)    - standoff * nz
@@ -1012,7 +1015,7 @@ class RLAgentNode(Node):
         When omitted, a single patch centred on (target_y, target_z) is used.
 
         Surface normal is resolved from /spray/tracking_pose so the nozzle
-        offset direction matches square_xz.cpp's pose_from_surface() exactly.
+        offset direction matches cartesian_trajectory_controller.cpp's pose_from_surface() exactly.
         Falls back to DEFAULT_SURFACE_N* when no tracking pose is available.
         """
         path = Path()
@@ -1060,7 +1063,10 @@ class RLAgentNode(Node):
         obs = self._build_obs(smoothed)
 
         # ── Reward for previous transition ───────────────────────────────
-        reward = self._compute_reward(obs)
+        self._ik_penalty       = self._consume_ik_penalty()
+        self._planning_penalty = self._consume_planning_penalty()
+        reward = self._compute_reward(
+            obs, ik_penalty=self._ik_penalty + self._planning_penalty)
         self._total_reward += reward
 
         # ── TD3: store transition from last step ──────────────────────────
@@ -1104,6 +1110,11 @@ class RLAgentNode(Node):
         target_y  = params['target_y']
         target_z  = params['target_z']
 
+        # Enforce the actual reachable workspace bounds before building the path.
+        standoff = float(np.clip(standoff, STANDOFF_MIN, STANDOFF_MAX))
+        target_y = float(np.clip(target_y, self.y_min, self.y_max))
+        target_z = float(np.clip(target_z, self.z_min, self.z_max))
+
         # ── Spray OFF while travelling ────────────────────────────────────
         self._set_spray(False)
 
@@ -1144,7 +1155,7 @@ class RLAgentNode(Node):
 
             if n_poses > 0:
                 # Spray ON gate: only enable spray when we are about to move
-                # (square_xz.cpp gate controls the actual actuator signal;
+                # (cartesian_trajectory_controller.cpp gate controls the actual actuator signal;
                 # this enable tells it we WANT spray on during this path).
                 self._set_spray(True)
                 self.path_pub.publish(paint_path)
@@ -1164,14 +1175,18 @@ class RLAgentNode(Node):
                 f'[{self._episode_step}] No defects | reward={reward:.2f} | '
                 f'spray OFF.')
 
+        self.get_logger().info(
+            f'STOP-CHECK any_defects={any_defects} '
+            f'target=({target_y:.3f},{target_z:.3f}) '
+            f'ik_penalty={self._ik_penalty:.2f} '
+            f'planning_penalty={self._planning_penalty:.2f} '
+            f'log_std={np.round(self.ppo.log_std, 3).tolist()}'
+        )
+
         # ── Publish RL action (spray parameters for spray_sim_node) ──────
         act_msg = Float32MultiArray()
         act_msg.data = [standoff, flow]
         self.action_pub.publish(act_msg)
-
-        # ── Legacy single-point target ────────────────────────────────────
-        pt = Point(); pt.x = standoff; pt.y = target_y; pt.z = target_z
-        self.target_pub.publish(pt)
 
         # ── Reward ───────────────────────────────────────────────────────
         r_msg = Float32(); r_msg.data = reward

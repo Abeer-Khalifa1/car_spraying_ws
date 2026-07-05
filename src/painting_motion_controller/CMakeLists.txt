@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(square_trajectory)
+project(painting_motion_controller)
 
 find_package(ament_cmake REQUIRED)
 
@@ -12,9 +12,11 @@ find_package(geometry_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 
-add_executable(square_xz src/square_xz.cpp)
+add_executable(cartesian_trajectory_controller
+    src/cartesian_trajectory_controller.cpp
+)
 
-ament_target_dependencies(square_xz
+ament_target_dependencies(cartesian_trajectory_controller
   rclcpp
   moveit_core
   moveit_ros_planning_interface
@@ -25,7 +27,7 @@ ament_target_dependencies(square_xz
   tf2_eigen
 )
 
-install(TARGETS square_xz
+install(TARGETS cartesian_trajectory_controller
   DESTINATION lib/${PROJECT_NAME}
 )
 

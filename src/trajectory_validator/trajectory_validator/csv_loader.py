@@ -1,18 +1,3 @@
-"""
-csv_loader.py
-=============
-Flexible trajectory CSV reader.
-
-Accepted column layouts (case-insensitive, auto-detected):
-    x, y, z
-    x, y, z, roll, pitch, yaw
-    time, x, y, z
-    time, x, y, z, roll, pitch, yaw
-    (no header — positional: col 0=x, 1=y, 2=z)
-
-Lines starting with '#' are treated as comments and skipped.
-"""
-
 from __future__ import annotations
 import csv
 import io
@@ -26,6 +11,9 @@ _ALIASES: dict[str, list[str]] = {
     'x':     ['x', 'pos_x', 'position_x'],
     'y':     ['y', 'pos_y', 'position_y'],
     'z':     ['z', 'pos_z', 'position_z'],
+    'nx':    ['nx', 'normal_x', 'norm_x', 'n_x'],
+    'ny':    ['ny', 'normal_y', 'norm_y', 'n_y'],
+    'nz':    ['nz', 'normal_z', 'norm_z', 'n_z'],
     'roll':  ['roll', 'rx', 'r'],
     'pitch': ['pitch', 'ry', 'p'],
     'yaw':   ['yaw', 'rz', 'yw'],
@@ -65,7 +53,10 @@ def load_csv(path: str | Path) -> list[dict[str, Any]]:
         float(all_rows[0][1])
         has_header = False
         data_rows  = all_rows
+        # Positional layout: col 0=x, 1=y, 2=z, (3-6=quat), 7=nx, 8=ny, 9=nz
         mapping: dict[str, int] = {'x': 0, 'y': 1, 'z': 2}
+        if len(all_rows[0]) >= 10:
+            mapping.update({'nx': 7, 'ny': 8, 'nz': 9})
     except (ValueError, IndexError):
         has_header = True
         mapping    = _map_header(all_rows[0])
@@ -93,7 +84,7 @@ def load_csv(path: str | Path) -> list[dict[str, Any]]:
                 '_col_y': mapping['y'],
                 '_col_z': mapping['z'],
             }
-            for key in ('time', 'roll', 'pitch', 'yaw'):
+            for key in ('time', 'roll', 'pitch', 'yaw', 'nx', 'ny', 'nz'):
                 if key in mapping:
                     try:
                         rec[key] = float(row[mapping[key]])

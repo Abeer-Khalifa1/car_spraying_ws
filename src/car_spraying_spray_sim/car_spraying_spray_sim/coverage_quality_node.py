@@ -1,41 +1,5 @@
 #!/usr/bin/env python3
 
-"""
-coverage_quality_node.py  (improved visualisation)
-========================================
-
-Real-time coating quality estimation.
-
-Nozzle: Lmuwnm ST-6 Automatic Spray Gun, ø1.0mm orifice
-Coverage unit mapping (simulation → physical):
-    coverage value = accumulated voxel hit count from spray_sim_node
-    ST-6 ø1.0mm SMD ≈ 15 µm per deposit layer
-    Single boustrophedon pass ≈ 1–4 hits per surface voxel at 10 Hz.
-    ----------------------------------------------------------------
-    Automotive OEM basecoat target: 13–38 µm  (per MDPI Coatings 2016)
-    Corresponding coverage thresholds (calibrated to sim hit counts):
-        < 1   : unpainted  — zero hits, no film formed
-        1     : weak       — below min adhesion (~13 µm equivalent)
-        2–6   : good       — target OEM basecoat window (13–38 µm)
-        > 6   : overspray  — excess material, risk of runs/sags
-
-Subscribes:
-    /spray/coverage_cloud   (PointCloud2: x, y, z, intensity=coverage)
-
-Publishes:
-    /spray/reward           (Float32)
-    /spray/unpainted_cloud  (PointCloud2)
-    /spray/good_cloud       (PointCloud2)
-    /spray/overspray_cloud  (PointCloud2)
-
-Visualisation layout (2×2 + status bar):
-    Top-left    — 3D scatter coloured by CONTINUOUS coverage heatmap
-    Top-right   — 2D Y-Z projection with heatmap + contour boundary
-    Bottom-left — Coverage histogram (distribution of hit counts)
-    Bottom-right— Zone breakdown bar chart
-    Top strip   — Large status panel (Good%, Coverage%, Reward) with traffic-light colour
-"""
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
@@ -55,9 +19,6 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 
 # ── thresholds ──────────────────────────────────────────────────
-# Calibrated to spray_sim_node output: 10 Hz timer, amount=1.0/voxel/tick,
-# voxel dedup per tick → a single boustrophedon pass produces ~1–4 hits.
-# Previous values (2/5/12) required 5+ hits for "good", unreachable in 1 pass.
 THR_UNPAINTED = 1.0   # < 1   → unpainted  (zero hits)
 THR_GOOD_LO   = 2.0   # 2–6   → good OEM window  (1–2 full passes)
 THR_GOOD_HI   = 6.0   # > 6   → overspray  (3+ passes, diminishing returns)
@@ -69,8 +30,6 @@ C_GOOD      = '#2dbe4e'   # lime green
 C_OVER      = '#e03030'   # red
 
 # ── continuous colourmap for heatmap views ──────────────────────
-# 'RdYlGn': red (no paint) → yellow (weak) → green (good) → ...
-# We cap the upper end so overspray doesn't look the same as good.
 CMAP_NAME  = 'RdYlGn'
 CMAP       = cm.get_cmap(CMAP_NAME)
 NORM_VMIN  = 0.0
@@ -297,9 +256,6 @@ class CoverageQualityNode(Node):
         over_pct     = (n_over / n) * 100.0
 
         # Reward is purely percentage-based so it doesn't scale with surface size.
-        # +2 per % of good coverage (13–38 µm OEM window)
-        # -1 per % of weak coverage (below 13 µm — insufficient adhesion)
-        # -3 per % of overspray    (above 38 µm — runs/sags risk, material waste)
         reward = quality_pct * 2.0 - weak_pct * 1.0 - over_pct * 3.0
 
         # ── publish zone clouds ──────────────────────────────────

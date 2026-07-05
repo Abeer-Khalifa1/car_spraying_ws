@@ -1,57 +1,3 @@
-"""
-full_system.launch.py
-=====================
-ONE launch file for the entire car-spraying pipeline:
-
-  Step 0  filter_and_forward   — validates peya.csv, strips out-of-reach
-                                  points (≤ 10 %), writes peya_validated.csv.
-                                  If > 10 % are unreachable → launch aborts here.
-
-  Step 1  Gazebo               — physics sim
-  Step 2  ROS-GZ Bridge        — gz ↔ ROS 2 topics
-  Step 3  RSP + static TF      — /robot_description, world→base_link
-  Step 4  MoveGroup            — motion planning
-  Step 5  Controllers          — joint_state_broadcaster, joint_trajectory_controller
-  Step 6  RViz2                — visualisation (MoveIt config)
-  Step 7  PLY marker publisher — part_mesh.ply + coverage mesh in RViz
-  Step 8  square_xz_node       — Cartesian trajectory executor (reads validated CSV)
-  Step 9  spray_sim_node       — paint cone simulation
-  Step 10 coverage_map_node    — 3-D surface coverage map
-  Step 11 coverage_quality_node— quality metrics overlay
-  Step 12 rl_agent_node        — PPO/TD3 defect-correction agent (PASS 2)
-
-Usage
------
-    ros2 launch car_spraying_robot full_system.launch.py
-
-    # Custom CSV / threshold:
-    ros2 launch car_spraying_robot full_system.launch.py \\
-        csv_path:=/home/user/car_spraying_ws/src/square_trajectory/peya.csv \\
-        threshold:=0.10
-
-    # Skip RL agent:
-    ros2 launch car_spraying_robot full_system.launch.py enable_rl:=false
-
-    # Skip PLY viewer:
-    ros2 launch car_spraying_robot full_system.launch.py enable_ply:=false
-
-Tunable arguments
------------------
-csv_path            Input trajectory CSV           (default: peya.csv)
-validated_csv_path  Filtered output CSV            (default: peya_validated.csv)
-threshold           Max unsafe fraction 0–1        (default: 0.10)
-gz_world_name       Gazebo world name              (default: world_demo)
-cone_length         Spray cone length [m]          (default: 0.20)
-cone_half_angle_deg Spray cone half-angle [deg]    (default: 15.0)
-sigma               Gaussian paint sigma [m]       (default: 0.03)
-spray_active        Start spray on or off          (default: true)
-enable_rl           Launch RL agent node           (default: true)
-enable_ply          Launch PLY mesh viewer         (default: true)
-mesh_ply            Path to part_mesh.ply
-coverage_ply        Path to part_mesh_coverage.ply
-mesh_frame          TF frame for PLY meshes        (default: camera_color_optical_frame)
-"""
-
 import os
 
 from launch import LaunchDescription
@@ -71,15 +17,15 @@ from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
-# ── Workspace-root paths (single place to edit) ───────────────────────────────
+# ── Workspace-root paths ──────────────────────────────────────────────────────
 _WS = "/home/user/car_spraying_ws/src"
 
 SDF_PATH      = f"{_WS}/car_spraying_robot/models/Spraying_Arm_moveit.sdf"
 URDF_PATH     = f"{_WS}/car_spraying_robot/urdf/UR3_Assembly_URDF_moveit.urdf"
 BRIDGE_CONFIG = f"{_WS}/car_spraying_robot/config/bridge_moveit.yaml"
 
-_DEFAULT_CSV     = f"{_WS}/square_trajectory/peya.csv"
-_DEFAULT_VAL_CSV = f"{_WS}/square_trajectory/peya_validated.csv"
+_DEFAULT_CSV     = f"{_WS}/painting_motion_controller/peya.csv"
+_DEFAULT_VAL_CSV = f"{_WS}/painting_motion_controller/peya_validated.csv"
 
 _PLY_SEARCH_DIRS = [
     f"{_WS}/ob_detection/ob_detection/spray_paths",
@@ -175,7 +121,9 @@ def generate_launch_description() -> LaunchDescription:
 
     # ═══════════════════════════════════════════════════════════════════════════
     # STEP 0 — filter_and_forward  (BLOCKING GATE)
-    # Runs first, exits immediately. If exit code != 0 the entire launch dies.
+    # Runs first, exits immediately.
+    # Exit code 0 → validation passed, rest of launch continues normally.
+    # Exit code 1 → too many unsafe points, handler emits Shutdown.
     # ═══════════════════════════════════════════════════════════════════════════
 
     filter_node = Node(
@@ -191,23 +139,30 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
-    # If filter exits with a non-zero code (rejected) → kill everything
+    # ── KEY FIX: only emit Shutdown when returncode != 0 ─────────────────────
+    # OnProcessExit fires for every exit (including clean exit 0).
+    # We guard with a lambda that checks event.returncode before acting.
+    def _on_filter_exit(event, context):
+        if event.returncode != 0:
+            # Trajectory was rejected — kill the whole launch
+            print(
+                '\n'
+                '╔══════════════════════════════════════════════════════════╗\n'
+                '║  filter_and_forward: trajectory REJECTED                ║\n'
+                '║  Too many waypoints outside the workspace.              ║\n'
+                '║  Fix peya.csv or raise the threshold.                   ║\n'
+                '║  Aborting — Gazebo will NOT be started.                 ║\n'
+                '╚══════════════════════════════════════════════════════════╝'
+            )
+            return [EmitEvent(event=Shutdown(
+                reason='Trajectory validation failed — path out of reach'))]
+        # returncode == 0: validation passed, do nothing — launch continues
+        return []
+
     shutdown_on_filter_fail = RegisterEventHandler(
         OnProcessExit(
             target_action=filter_node,
-            on_exit=[
-                LogInfo(msg=(
-                    '\n'
-                    '╔══════════════════════════════════════════════════════════╗\n'
-                    '║  filter_and_forward: trajectory REJECTED                ║\n'
-                    '║  Too many waypoints outside the workspace.              ║\n'
-                    '║  Fix peya.csv or raise the threshold.                   ║\n'
-                    '║  Aborting — Gazebo will NOT be started.                 ║\n'
-                    '╚══════════════════════════════════════════════════════════╝'
-                )),
-                EmitEvent(event=Shutdown(
-                    reason='Trajectory validation failed — path out of reach')),
-            ],
+            on_exit=_on_filter_exit,
         )
     )
 
@@ -221,7 +176,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 2 — ROS-GZ Bridge   (t=3 s — Gazebo needs ~3 s to open sockets)
+    # STEP 2 — ROS-GZ Bridge   (t=3 s)
     # ═══════════════════════════════════════════════════════════════════════════
 
     bridge = Node(
@@ -253,7 +208,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 4 — MoveGroup   (t=5 s — needs /robot_description from RSP)
+    # STEP 4 — MoveGroup   (t=5 s)
     # ═══════════════════════════════════════════════════════════════════════════
 
     move_group = Node(
@@ -268,7 +223,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 5 — Controllers   (t=6 s / t=7 s)
+    # STEP 5 — Controllers
     # ═══════════════════════════════════════════════════════════════════════════
 
     jsb_spawner = Node(
@@ -288,7 +243,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 6 — RViz2   (t=8 s)
+    # STEP 6 — RViz2
     # ═══════════════════════════════════════════════════════════════════════════
 
     rviz = Node(
@@ -307,7 +262,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 7 — PLY mesh publisher   (t=9 s, optional)
+    # STEP 7 — PLY mesh publisher   (optional)
     # ═══════════════════════════════════════════════════════════════════════════
 
     ply_publisher = Node(
@@ -326,27 +281,25 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 8 — square_xz_node   (t=15 s — controllers must be fully ready)
-    # Reads the VALIDATED csv via the csv_path parameter injected here.
+    # STEP 8 — square_xz_node  (reads validated CSV via csv_path param)
     # ═══════════════════════════════════════════════════════════════════════════
 
     trajectory_node = Node(
-        package="square_trajectory",
-        executable="square_xz",
-        name="square_xz_node",
+        package="painting_motion_controller",
+        executable="cartesian_trajectory_controller",
+        name="cartesian_trajectory_controller",
         output="screen",
         parameters=[
             moveit_config.robot_description,
             moveit_config.robot_description_semantic,
             moveit_config.robot_description_kinematics,
             sim_time,
-            # KEY: point square_xz at the validated (filtered) CSV
             {"csv_path": LaunchConfiguration('validated_csv_path')},
         ],
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 9 — Spray sim   (t=17 s)
+    # STEP 9 — Spray sim
     # ═══════════════════════════════════════════════════════════════════════════
 
     spray_sim = Node(
@@ -363,19 +316,19 @@ def generate_launch_description() -> LaunchDescription:
             'cone_half_angle_deg': LaunchConfiguration('cone_half_angle_deg'),
             'sigma':               LaunchConfiguration('sigma'),
             'spray_active':        LaunchConfiguration('spray_active'),
-            'num_sample_rings':    8,
-            'num_angular_pts':     36,
-            'paint_point_spacing': 0.0015,
-            'max_paint_points':    300000,
-            'max_gz_spheres':      8000,
-            'gz_sphere_radius':    0.010,
-            'publish_rate_hz':     10.0,
-            'gz_spawn_every_n':    5,
+            'num_sample_rings':    16,
+            'num_angular_pts':     64,
+            'paint_point_spacing': 0.00001,
+            'max_paint_points':    600000,
+            'max_gz_spheres':      12000,
+            'gz_sphere_radius':    0.006,
+            'publish_rate_hz':     20.0,
+            'gz_spawn_every_n':    3,
         }],
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 10 — Coverage map   (t=17 s alongside spray sim)
+    # STEP 10 — Coverage map
     # ═══════════════════════════════════════════════════════════════════════════
 
     coverage_map_node = Node(
@@ -386,13 +339,12 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             'use_sim_time':   True,
             'resolution':     0.02,
-            # Coverage map also points at the validated CSV for surface data
             'trajectory_csv': LaunchConfiguration('validated_csv_path'),
         }],
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 11 — Coverage quality   (t=17 s)
+    # STEP 11 — Coverage quality
     # ═══════════════════════════════════════════════════════════════════════════
 
     coverage_quality_node = Node(
@@ -407,11 +359,11 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 12 — RL agent   (t=17 s, optional)
+    # STEP 12 — RL agent   (optional)
     # ═══════════════════════════════════════════════════════════════════════════
 
     rl_agent_node = Node(
-        package='square_trajectory',
+        package='painting_motion_controller',
         executable='rl_agent_node.py',
         name='rl_agent_node',
         output='screen',
@@ -425,52 +377,41 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription([
 
-        # ── Arguments ──────────────────────────────────────────────────────────
-        arg_csv,
-        arg_val_csv,
-        arg_threshold,
-        arg_gz_world,
-        arg_cone_len,
-        arg_half_angle,
-        arg_sigma,
-        arg_spray_active,
-        arg_enable_rl,
-        arg_enable_ply,
-        arg_mesh_ply,
-        arg_coverage_ply,
-        arg_mesh_frame,
+        # Arguments
+        arg_csv, arg_val_csv, arg_threshold,
+        arg_gz_world, arg_cone_len, arg_half_angle, arg_sigma, arg_spray_active,
+        arg_enable_rl, arg_enable_ply, arg_mesh_ply, arg_coverage_ply, arg_mesh_frame,
 
-        # ── STEP 0: validate CSV (gate — kills launch on failure) ──────────────
+        # STEP 0 — validate CSV first (gate)
         filter_node,
         shutdown_on_filter_fail,
 
-        # ── STEP 1: Gazebo ─────────────────────────────────────────────────────
-        # Small delay so filter_and_forward has time to print its report first
-        TimerAction(period=1.0, actions=[gazebo]),
+        # STEP 1 — Gazebo (small delay so filter prints its report cleanly)
+        TimerAction(period=1.0,  actions=[gazebo]),
 
-        # ── STEP 2: Bridge ─────────────────────────────────────────────────────
+        # STEP 2 — Bridge
         TimerAction(period=4.0,  actions=[bridge]),
 
-        # ── STEP 3: RSP + TF ───────────────────────────────────────────────────
+        # STEP 3 — RSP + TF
         TimerAction(period=5.0,  actions=[rsp, static_tf]),
 
-        # ── STEP 4: MoveGroup ──────────────────────────────────────────────────
+        # STEP 4 — MoveGroup
         TimerAction(period=6.0,  actions=[move_group]),
 
-        # ── STEP 5: Controllers ────────────────────────────────────────────────
+        # STEP 5 — Controllers
         TimerAction(period=7.0,  actions=[jsb_spawner]),
         TimerAction(period=8.0,  actions=[jtc_spawner]),
 
-        # ── STEP 6: RViz ───────────────────────────────────────────────────────
+        # STEP 6 — RViz
         TimerAction(period=9.0,  actions=[rviz]),
 
-        # ── STEP 7: PLY mesh viewer ────────────────────────────────────────────
+        # STEP 7 — PLY mesh viewer
         TimerAction(period=10.0, actions=[ply_publisher]),
 
-        # ── STEP 8: Trajectory executor (validated CSV) ────────────────────────
+        # STEP 8 — Trajectory executor
         TimerAction(period=16.0, actions=[trajectory_node]),
 
-        # ── STEPS 9-12: Spray + Coverage + RL ─────────────────────────────────
+        # STEPS 9–12 — Spray + Coverage + RL
         TimerAction(period=18.0, actions=[
             spray_sim,
             coverage_map_node,

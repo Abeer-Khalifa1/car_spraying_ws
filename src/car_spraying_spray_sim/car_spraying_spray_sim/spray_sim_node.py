@@ -16,8 +16,6 @@ import tf2_ros
 # ── PointCloud2 helper ────────────────────────────────────────────────────────
 def _make_cloud(header: Header, points: np.ndarray) -> PointCloud2: # simple PointCloud2 builder for XYZ float32 data
     # This function creates a PointCloud2 message from a numpy array of points represent the paint deposits. 
-    # Each point is expected to have 3 float32 values (x, y, z). 
-    # The resulting PointCloud2 message can be published for use in RViz or other tools that consume point clouds.
     msg = PointCloud2()
     msg.header       = header
     msg.height       = 1
@@ -72,14 +70,6 @@ class SpraySimNode(Node):
         super().__init__('spray_sim_node')
 
         # ── Parameters ──────────────────────────────────────────────────────
-        # Physical nozzle: Lmuwnm ST-6 Automatic Spray Gun, ø1.0mm orifice
-        # Specs from manual (actual spray data, water test liquid):
-        #   Nozzle orifice      : ø1.0 mm
-        #   Fan pattern @ 300mm : 200 mm wide  → half-angle = atan(100/300) ≈ 18.4°
-        #   Test standoff       : 300 mm (12") → cone_length = 0.30 m
-        #   Particle size SMD   : 15 µm  (radial spread at 300mm → σ ≈ 35 mm)
-        #   Air consumption     : 100 L/min (continuous)
-        #   Compressor          : 1.5 kW
         self.declare_parameter('end_effector_frame',   'link_6')
         self.declare_parameter('world_frame',          'world')
         self.declare_parameter('gz_world_name',        'world_demo')
@@ -134,9 +124,6 @@ class SpraySimNode(Node):
         self._tick     = 0
 
         # ── EEF speed gate ───────────────────────────────────────────────────
-        # Paint is only deposited when the end-effector is actually moving.
-        # This prevents the blob that forms when spray is ON but the robot is
-        # still planning/waiting between trajectory segments.
         self._prev_eef_pos:  np.ndarray = None   # last known EEF world position
         self._eef_speed:     float      = 0.0    # m/s estimated from TF delta
         self._MIN_EEF_SPEED: float      = 0.003  # m/s — below this = "still"
@@ -205,8 +192,6 @@ class SpraySimNode(Node):
     # ── Geometry ──────────────────────────────────────────────────────────────
     def _build_cone_sample_pts(self) -> np.ndarray:
         pts = []
-        # include a central sample directly on-axis so the row under the
-        # nozzle receives points (avoids a hole at z~=0)
         pts.append([0.0, 0.0, 0.0, 1.0])
         for k in range(1, self._n_rings + 1):
             z     = self._cone_len * k / self._n_rings
@@ -334,9 +319,6 @@ class SpraySimNode(Node):
 
         # ── EEF speed estimate ────────────────────────────────────────────────
         # Compute how fast the end-effector is moving by diffing the TF
-        # translation against the previous tick.  The timer rate is fixed so
-        # we use 1/rate_hz as dt.  This gives a reliable "is the robot moving"
-        # signal without needing to subscribe to joint states.
         cur_eef_pos = np.array([
             tf_stamped.transform.translation.x,
             tf_stamped.transform.translation.y,
@@ -370,9 +352,6 @@ class SpraySimNode(Node):
         new_pts_this_tick: list = []
 
         # Gate: only deposit paint when spray is ON AND robot is moving.
-        # When the robot is still (planning gap, segment boundary, approach
-        # move) eef_speed is near zero and we skip deposition entirely,
-        # preventing the paint blob seen in the thickness map.
         if self._spray_on and (not self._enforce_min or self._eef_speed >= self._MIN_EEF_SPEED):
             pts_w   = self._apply_transform(T, self._cone_pts[:, :3])
             weights = self._cone_pts[:, 3]
@@ -405,14 +384,6 @@ class SpraySimNode(Node):
         ma.markers.append(self._nozzle_marker(stamp, T))
 
         # ── Incremental paint cloud publish ───────────────────────────────────
-        # Strategy:
-        #   • New points this tick → stage in pending_pts.
-        #   • Every heartbeat_ticks ticks → re-send full committed+pending as
-        #     a single ADD marker so late-joining RViz instances catch up.
-        #     FIX: removed the `if self._committed_pts` guard — the heartbeat
-        #     must fire even on the very first batch so RViz sees it.
-        #   • Between heartbeats → send only the incremental pending slice.
-        #   • Never send an empty marker list (would corrupt the display).
 
         if new_pts_this_tick:
             self._pending_pts.extend(new_pts_this_tick)
@@ -422,7 +393,6 @@ class SpraySimNode(Node):
         if heartbeat:
             all_pts = self._committed_pts + self._pending_pts
             if all_pts:
-                # FIX: send regardless of whether committed was empty before
                 ma.markers.append(
                     self._build_paint_sphere_list(stamp, all_pts, Marker.ADD))
                 self._committed_pts = all_pts

@@ -1,17 +1,3 @@
-"""
-spray_sim.launch.py  (fixed)
-=============================
-Stand-alone launch for the spray simulation node.
-Run AFTER spawn_robot_moveit.launch.py is already up.
-
-  ros2 launch car_spraying_spray_sim spray_sim.launch.py
-
-FIX: Added missing gz_world_name, gz_spawn_every_n, max_gz_spheres,
-     and gz_sphere_radius parameters so the standalone launch file
-     is consistent with spawn_robot_moveit.launch.py.  Previously
-     these fell back to node defaults (wrong world name, gz_spawn_every_n=4)
-     which caused silent failures and spawn throttling differences.
-"""
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
@@ -62,8 +48,8 @@ def generate_launch_description():
             'max_paint_points':    30000,
             'max_gz_spheres':      5000,
             'gz_sphere_radius':    0.008,
-            'publish_rate_hz':     10.0,   # FIX: was 20.0
-            'gz_spawn_every_n':    3,       # FIX: was not set (defaulted to 4)
+            'publish_rate_hz':     10.0,  
+            'gz_spawn_every_n':    3,       
         }],
     )
 

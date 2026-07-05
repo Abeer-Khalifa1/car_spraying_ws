@@ -1,41 +1,3 @@
-"""
-full_system.launch.py
-=====================
-ONE launch file for the entire car-spraying pipeline:
-
-  Step 0  filter_and_forward   — validates peya.csv, strips out-of-reach
-                                  points (≤ 10 %), writes peya_validated.csv.
-                                  If > 10 % are unreachable → launch aborts here.
-
-  Step 1  Gazebo               — physics sim
-  Step 2  ROS-GZ Bridge        — gz ↔ ROS 2 topics
-  Step 3  RSP + static TF      — /robot_description, world→base_link
-  Step 4  MoveGroup            — motion planning
-  Step 5  Controllers          — joint_state_broadcaster, joint_trajectory_controller
-  Step 6  RViz2                — visualisation (MoveIt config)
-  Step 7  PLY marker publisher — part_mesh.ply + coverage mesh in RViz
-  Step 8  square_xz_node       — Cartesian trajectory executor (reads validated CSV)
-  Step 9  spray_sim_node       — paint cone simulation
-  Step 10 coverage_map_node    — 3-D surface coverage map
-  Step 11 coverage_quality_node— quality metrics overlay
-  Step 12 rl_agent_node        — PPO/TD3 defect-correction agent (PASS 2)
-
-Usage
------
-    ros2 launch car_spraying_robot full_system.launch.py
-
-    # Custom CSV / threshold:
-    ros2 launch car_spraying_robot full_system.launch.py \
-        csv_path:=/home/user/car_spraying_ws/src/square_trajectory/peya.csv \
-        threshold:=0.10
-
-    # Skip RL agent:
-    ros2 launch car_spraying_robot full_system.launch.py enable_rl:=false
-
-    # Skip PLY viewer:
-    ros2 launch car_spraying_robot full_system.launch.py enable_ply:=false
-"""
-
 import os
 
 from launch import LaunchDescription
@@ -62,8 +24,8 @@ SDF_PATH      = f"{_WS}/car_spraying_robot/models/Spraying_Arm_moveit.sdf"
 URDF_PATH     = f"{_WS}/car_spraying_robot/urdf/UR3_Assembly_URDF_moveit.urdf"
 BRIDGE_CONFIG = f"{_WS}/car_spraying_robot/config/bridge_moveit.yaml"
 
-_DEFAULT_CSV     = f"{_WS}/square_trajectory/peya.csv"
-_DEFAULT_VAL_CSV = f"{_WS}/square_trajectory/peya_validated.csv"
+_DEFAULT_CSV     = f"{_WS}/painting_motion_controller/peya.csv"
+_DEFAULT_VAL_CSV = f"{_WS}/painting_motion_controller/peya_validated.csv"
 
 _PLY_SEARCH_DIRS = [
     f"{_WS}/ob_detection/ob_detection/spray_paths",
@@ -122,7 +84,7 @@ def generate_launch_description() -> LaunchDescription:
         description='Gazebo world name — must match <world name=...> in SDF')
 
     arg_cone_len = DeclareLaunchArgument(
-        'cone_length', default_value='0.20',
+        'cone_length', default_value='0.21',
         description='Spray cone length [m]')
 
     arg_half_angle = DeclareLaunchArgument(
@@ -323,9 +285,9 @@ def generate_launch_description() -> LaunchDescription:
     # ═══════════════════════════════════════════════════════════════════════════
 
     trajectory_node = Node(
-        package="square_trajectory",
-        executable="square_xz",
-        name="square_xz_node",
+        package="painting_motion_controller",
+        executable="cartesian_trajectory_controller",
+        name="cartesian_trajectory_controller",
         output="screen",
         parameters=[
             moveit_config.robot_description,
@@ -354,14 +316,14 @@ def generate_launch_description() -> LaunchDescription:
             'cone_half_angle_deg': LaunchConfiguration('cone_half_angle_deg'),
             'sigma':               LaunchConfiguration('sigma'),
             'spray_active':        LaunchConfiguration('spray_active'),
-            'num_sample_rings':    8,
-            'num_angular_pts':     36,
-            'paint_point_spacing': 0.0015,
-            'max_paint_points':    300000,
-            'max_gz_spheres':      8000,
-            'gz_sphere_radius':    0.010,
-            'publish_rate_hz':     10.0,
-            'gz_spawn_every_n':    5,
+            'num_sample_rings':    16,
+            'num_angular_pts':     64,
+            'paint_point_spacing': 0.00001,
+            'max_paint_points':    600000,
+            'max_gz_spheres':      12000,
+            'gz_sphere_radius':    0.006,
+            'publish_rate_hz':     20.0,
+            'gz_spawn_every_n':    3,
         }],
     )
 
@@ -395,19 +357,6 @@ def generate_launch_description() -> LaunchDescription:
             'trajectory_csv': LaunchConfiguration('validated_csv_path'),
         }],
     )
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 12 — RL agent   (optional)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    # rl_agent_node = Node(
-    #     package='square_trajectory',
-    #     executable='rl_agent_node.py',
-    #     name='rl_agent_node',
-    #     output='screen',
-    #     condition=IfCondition(LaunchConfiguration('enable_rl')),
-    #     parameters=[{'use_sim_time': True}],
-    # )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ASSEMBLE

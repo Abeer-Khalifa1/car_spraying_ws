@@ -1,36 +1,4 @@
 #!/usr/bin/env python3
-"""
-filter_and_forward.py
-=====================
-Validates peya.csv against the robot workspace, strips unreachable waypoints
-(if they are ≤ 10 % of the total), writes a clean peya_validated.csv, then
-publishes the validated CSV path on the ROS 2 topic
-  /trajectory_validator/validated_csv_path   (std_msgs/String, TRANSIENT_LOCAL)
-
-square_xz.cpp reads its CSV path from the ROS 2 parameter  csv_path  which can
-be overridden at launch time — so no recompile is needed to point it at the
-validated file.
-
-Exit codes
-----------
-  0  validation passed (with or without stripped points)
-  1  too many unreachable points (> 10 %) — path rejected, square_xz NOT started
-  2  input error (file not found, bad CSV …)
-
-Usage (standalone — no ROS required)
--------------------------------------
-    python3 filter_and_forward.py /path/to/peya.csv \\
-            --output /path/to/peya_validated.csv \\
-            [--threshold 0.10]
-
-Usage as a ROS 2 node (launched before square_xz)
----------------------------------------------------
-    ros2 run trajectory_validator filter_and_forward \\
-        --ros-args \\
-        -p csv_path:=/home/user/car_spraying_ws/src/square_trajectory/peya.csv \\
-        -p output_path:=/home/user/car_spraying_ws/src/square_trajectory/peya_validated.csv \\
-        -p threshold:=0.10
-"""
 
 from __future__ import annotations
 
@@ -40,12 +8,12 @@ from pathlib import Path
 
 # ── allow both standalone and ROS-installed import ───────────────────────────
 try:
-    from trajectory_validator.robot_workspace import check_point
+    from trajectory_validator.robot_workspace import check_point, clamp_point
     from trajectory_validator.csv_loader import load_csv, save_csv
 except ImportError:
     import os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-    from trajectory_validator.robot_workspace import check_point
+    from trajectory_validator.robot_workspace import check_point, clamp_point
     from trajectory_validator.csv_loader import load_csv, save_csv
 
 
@@ -58,21 +26,11 @@ def filter_trajectory(
     output_csv: str,
     threshold: float = 0.10,
     verbose: bool = True,
+    standoff: float = 0.20,
+    clamp: bool = True,
+    max_clamp_correction: float = 0.002,
 ) -> dict:
-    """
-    Validate *input_csv*, strip unreachable points if within *threshold*, and
-    write the result to *output_csv*.
 
-    Returns
-    -------
-    dict with keys:
-        total       – total waypoints in input
-        safe        – waypoints within workspace
-        unsafe      – waypoints outside workspace
-        unsafe_pct  – fraction of total that are unsafe (0.0 – 1.0)
-        passed      – True if unsafe_pct <= threshold
-        output_path – path written (None if rejected)
-    """
     try:
         records = load_csv(input_csv)
     except Exception as exc:
@@ -83,19 +41,67 @@ def filter_trajectory(
         print('[filter_and_forward] ERROR: CSV contains no valid rows.', file=sys.stderr)
         sys.exit(2)
 
+    # Check whether normals were loaded
+    has_normals = all('nx' in rec and 'ny' in rec and 'nz' in rec for rec in records)
+    if not has_normals:
+        print(
+            '[filter_and_forward] WARNING: Surface normal columns (7-9 / nx,ny,nz) '
+            'not found in CSV. Falling back to validating raw surface points. '
+            'This may pass points whose nozzle positions are outside the workspace.',
+            file=sys.stderr,
+        )
+
     total = len(records)
-    safe_records   = []
-    unsafe_records = []
+    safe_records    = []
+    clamped_records = []
+    unsafe_records  = []
 
     for rec in records:
-        ok, violations = check_point(rec['x'], rec['y'], rec['z'])
+        if has_normals:
+            # Compute actual nozzle position — this is what the arm moves to.
+            # Matches square_xz.cpp pose_from_surface():
+            #   pose.position.x = wp.x - standoff * wp.nx  (and same for y, z)
+            import math
+            nx, ny, nz = rec['nx'], rec['ny'], rec['nz']
+            n_len = math.sqrt(nx*nx + ny*ny + nz*nz)
+            if n_len > 1e-9:
+                nx, ny, nz = nx/n_len, ny/n_len, nz/n_len
+            check_x = rec['x'] - standoff * nx
+            check_y = rec['y'] - standoff * ny
+            check_z = rec['z'] - standoff * nz
+        else:
+            check_x, check_y, check_z = rec['x'], rec['y'], rec['z']
+
+        ok, violations = check_point(check_x, check_y, check_z)
         if ok:
             safe_records.append(rec)
-        else:
-            unsafe_records.append((rec, violations))
+            continue
 
-    n_safe   = len(safe_records)
-    n_unsafe = len(unsafe_records)
+        if clamp:
+            import math
+            ccx, ccy, ccz = clamp_point(check_x, check_y, check_z)
+            correction = math.sqrt(
+                (ccx - check_x) ** 2 + (ccy - check_y) ** 2 + (ccz - check_z) ** 2)
+
+            if correction <= max_clamp_correction:
+                # Nudge the surface point by the same delta as the nozzle
+                # correction so the clamped nozzle position lands exactly
+                # on the workspace boundary.
+                dx, dy, dz = ccx - check_x, ccy - check_y, ccz - check_z
+                clamped_rec = dict(rec)
+                clamped_rec['x'] = rec['x'] + dx
+                clamped_rec['y'] = rec['y'] + dy
+                clamped_rec['z'] = rec['z'] + dz
+                safe_records.append(clamped_rec)
+                clamped_records.append((rec, violations, correction))
+                continue
+            # else: correction too large — falls through to unsafe/dropped
+
+        unsafe_records.append((rec, violations, check_x, check_y, check_z))
+
+    n_safe    = len(safe_records) - len(clamped_records)
+    n_clamped = len(clamped_records)
+    n_unsafe  = len(unsafe_records)
     unsafe_pct = n_unsafe / total
 
     # ── summary banner ───────────────────────────────────────────────────────
@@ -107,15 +113,30 @@ def filter_trajectory(
         print(f'  Input CSV   : {input_csv}')
         print(f'  Total pts   : {total}')
         print(f'  Safe        : {n_safe}  ({100*(n_safe/total):.1f} %)')
-        print(f'  Unsafe      : {n_unsafe}  ({100*unsafe_pct:.1f} %)')
+        if clamp:
+            print(f'  Clamped     : {n_clamped}  ({100*(n_clamped/total):.1f} %)  '
+                  f'[correction <= {1000*max_clamp_correction:.1f} mm]')
+        print(f'  Unsafe      : {n_unsafe}  ({100*unsafe_pct:.1f} %)  (dropped)')
         print(f'  Threshold   : ≤ {100*threshold:.0f} % unsafe allowed')
         print(f'{sep}')
 
+        if clamped_records:
+            print()
+            for rec, viols, correction in clamped_records:
+                print(f'  [CLAMPED] Row {rec["row_index"]:4d}  '
+                      f'surface=({rec["x"]:+.4f}, {rec["y"]:+.4f}, {rec["z"]:+.4f})  '
+                      f'correction={1000*correction:.2f} mm')
+                for v in viols:
+                    print(f'           → {v}')
+            print()
+
         if unsafe_records:
             print()
-            for rec, viols in unsafe_records:
+            lbl = 'NOZZLE' if has_normals else 'SURFACE'
+            for rec, viols, cx, cy, cz in unsafe_records:
                 print(f'  [UNSAFE] Row {rec["row_index"]:4d}  '
-                      f'({rec["x"]:+.4f}, {rec["y"]:+.4f}, {rec["z"]:+.4f})')
+                      f'surface=({rec["x"]:+.4f}, {rec["y"]:+.4f}, {rec["z"]:+.4f})  '
+                      f'{lbl}=({cx:+.4f}, {cy:+.4f}, {cz:+.4f})')
                 for v in viols:
                     print(f'           → {v}')
             print()
@@ -136,6 +157,7 @@ def filter_trajectory(
         return {
             'total': total,
             'safe': n_safe,
+            'clamped': n_clamped,
             'unsafe': n_unsafe,
             'unsafe_pct': unsafe_pct,
             'passed': False,
@@ -159,15 +181,20 @@ def filter_trajectory(
     save_csv(safe_records, output_csv, header)
 
     if verbose:
-        status = 'PASSED (all points safe)' if n_unsafe == 0 else \
-                 f'PASSED — {n_unsafe} unsafe point(s) stripped'
+        bits = []
+        if n_clamped:
+            bits.append(f'{n_clamped} clamped')
+        if n_unsafe:
+            bits.append(f'{n_unsafe} unsafe point(s) stripped')
+        status = 'PASSED (all points safe)' if not bits else f'PASSED — {", ".join(bits)}'
         print(f'  ✓ {status}')
-        print(f'  Output CSV  : {output_csv}  ({n_safe} rows)')
+        print(f'  Output CSV  : {output_csv}  ({len(safe_records)} rows)')
         print(f'  Ready for square_xz.\n')
 
     return {
         'total': total,
         'safe': n_safe,
+        'clamped': n_clamped,
         'unsafe': n_unsafe,
         'unsafe_pct': unsafe_pct,
         'passed': True,
@@ -198,10 +225,14 @@ def ros_main(args=None) -> None:
     node.declare_parameter('csv_path', '')
     node.declare_parameter('output_path', '')
     node.declare_parameter('threshold', 0.10)
+    node.declare_parameter('clamp', True)
+    node.declare_parameter('max_clamp_correction', 0.002)
 
     csv_path    = node.get_parameter('csv_path').value
     output_path = node.get_parameter('output_path').value
     threshold   = float(node.get_parameter('threshold').value)
+    clamp       = bool(node.get_parameter('clamp').value)
+    max_clamp_correction = float(node.get_parameter('max_clamp_correction').value)
 
     if not csv_path:
         node.get_logger().error(
@@ -216,7 +247,8 @@ def ros_main(args=None) -> None:
         output_path = str(p.parent / (p.stem + '_validated' + p.suffix))
 
     # Run the filter (verbose to logger-friendly stdout)
-    result = filter_trajectory(csv_path, output_path, threshold=threshold)
+    result = filter_trajectory(csv_path, output_path, threshold=threshold,
+                                clamp=clamp, max_clamp_correction=max_clamp_correction)
 
     if not result['passed']:
         node.get_logger().error(
@@ -227,8 +259,8 @@ def ros_main(args=None) -> None:
         sys.exit(1)
 
     node.get_logger().info(
-        f'Trajectory validated: {result["safe"]}/{result["total"]} safe '
-        f'({result["unsafe"]} stripped). '
+        f'Trajectory validated: {result["safe"]}/{result["total"]} safe, '
+        f'{result["clamped"]} clamped, {result["unsafe"]} stripped. '
         f'Output: {output_path}')
 
     # Publish validated path with TRANSIENT_LOCAL so square_xz can receive it
@@ -282,6 +314,12 @@ def main(argv=None) -> None:
                         help='Max fraction of unsafe points allowed (default 0.10 = 10 %%)')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress per-row violation output')
+    parser.add_argument('--no-clamp', dest='clamp', action='store_false',
+                        help='Disable clamping — strip all unsafe points instead (old behavior)')
+    parser.add_argument('--max-clamp-correction', type=float, default=0.002,
+                        help='Max correction distance in metres to allow when clamping '
+                             '(default 0.002 = 2 mm); larger corrections are dropped instead')
+    parser.set_defaults(clamp=True)
     args = parser.parse_args(raw)
 
     if not Path(args.input).is_file():
@@ -298,6 +336,8 @@ def main(argv=None) -> None:
         output_csv = output,
         threshold  = args.threshold,
         verbose    = not args.quiet,
+        clamp      = args.clamp,
+        max_clamp_correction = args.max_clamp_correction,
     )
 
     sys.exit(0 if result['passed'] else 1)

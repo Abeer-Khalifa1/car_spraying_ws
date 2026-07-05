@@ -301,7 +301,7 @@ class CoverageMapGenerator(Node):
 
     def save_coverage_to_csv(self):
         filename = (
-            '/home/user/car_spraying_ws/src/square_trajectory/coverage_3d.csv'
+            '/home/user/car_spraying_ws/src/car_spraying_spray_sim/data/coverage_3d.csv'
         )
         with self.lock:
             pts      = self.surface.surface_points.copy()

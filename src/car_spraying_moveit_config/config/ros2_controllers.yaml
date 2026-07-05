@@ -23,7 +23,7 @@ joint_trajectory_controller:
     state_interfaces:
       - position
       - velocity
-    # Add this to help with simulation jitter
+   
     state_publish_rate: 100.0
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false  
