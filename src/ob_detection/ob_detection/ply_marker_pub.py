@@ -8,6 +8,8 @@ them as visualization_msgs/Marker (TRIANGLE_LIST) at a configurable rate.
 Topics published:
   /part_mesh_marker           — raw mesh, solid blue
   /part_mesh_coverage_marker  — coverage-coloured mesh (colour from PLY face RGB)
+  /part_mesh_cloud            — raw mesh vertices as PointCloud2
+  /part_mesh_coverage_cloud   — coverage mesh vertices as PointCloud2 with RGB
 
 Parameters:
   mesh_ply         (str)   path to part_mesh.ply
@@ -30,7 +32,9 @@ import struct
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
-from std_msgs.msg import ColorRGBA
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import ColorRGBA, Header
 from visualization_msgs.msg import Marker
 
 
@@ -146,16 +150,21 @@ class PlyMarkerPublisher(Node):
                 f'publish_rate_hz={rate_hz} is invalid; defaulting to 1.0 Hz')
             rate_hz = 1.0
 
-        self.mesh_pub     = self.create_publisher(Marker, '/part_mesh_marker',          1)
-        self.coverage_pub = self.create_publisher(Marker, '/part_mesh_coverage_marker', 1)
+        self.mesh_pub          = self.create_publisher(Marker, '/part_mesh_marker',          1)
+        self.coverage_pub      = self.create_publisher(Marker, '/part_mesh_coverage_marker', 1)
+        self.mesh_cloud_pub    = self.create_publisher(PointCloud2, '/part_mesh_cloud', 1)
+        self.coverage_cloud_pub= self.create_publisher(PointCloud2, '/part_mesh_coverage_cloud', 1)
 
         self.mesh_marker     = None
         self.coverage_marker = None
+        self.mesh_cloud      = None
+        self.coverage_cloud  = None
 
         if mesh_path:
-            self.mesh_marker = self._load_plain(mesh_path, ns='part_mesh', marker_id=0)
+            self.mesh_marker, self.mesh_cloud = self._load_plain(
+                mesh_path, ns='part_mesh', marker_id=0)
         if coverage_path:
-            self.coverage_marker = self._load_coverage(
+            self.coverage_marker, self.coverage_cloud = self._load_coverage(
                 coverage_path, ns='part_mesh_coverage', marker_id=1)
 
         # FIX: warn clearly when neither file was loaded so the user isn't
@@ -181,10 +190,11 @@ class PlyMarkerPublisher(Node):
         period = 1.0 / rate_hz
         self.create_timer(period, self._publish)
         self.get_logger().info(
-            f'PLY marker publisher ready  frame={self.frame_id}  '
+            f'PLY marker + PointCloud2 publisher ready  frame={self.frame_id}  '
             f'rate={rate_hz:.1f} Hz\n'
             f'  mesh:     {mesh_path or "(not set)"}\n'
-            f'  coverage: {coverage_path or "(not set)"}')
+            f'  coverage: {coverage_path or "(not set)"}\n'
+            f'  pointclouds: /part_mesh_cloud, /part_mesh_coverage_cloud')
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -215,17 +225,51 @@ class PlyMarkerPublisher(Node):
         m.pose.orientation.w = 1.0
         return m
 
+    @staticmethod
+    def _rgb_to_float(r, g, b):
+        rgb = (int(r) << 16) | (int(g) << 8) | int(b)
+        return struct.unpack('f', struct.pack('I', rgb))[0]
+
+    def _make_cloud(self, vertices, rgb_values=None):
+        header = Header()
+        header.frame_id = self.frame_id
+
+        if rgb_values is None:
+            fields = [
+                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            ]
+            points = [(float(x), float(y), float(z)) for x, y, z in vertices]
+        else:
+            fields = [
+                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+                PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+            ]
+            points = []
+            for (x, y, z), (r, g, b) in zip(vertices, rgb_values):
+                points.append((
+                    float(x),
+                    float(y),
+                    float(z),
+                    self._rgb_to_float(r, g, b),
+                ))
+
+        return point_cloud2.create_cloud(header, fields, points)
+
     def _load_plain(self, path, ns, marker_id):
         """Solid semi-transparent blue marker."""
         # FIX: existence check first
         if not self._check_path(path):
-            return None
+            return None, None
 
         try:
             vertices, faces, _ = _parse_ply(path)
         except Exception as e:
             self.get_logger().error(f'Failed to parse {path}: {e}')
-            return None
+            return None, None
 
         m = self._base_marker(ns, marker_id)
         c = ColorRGBA(r=0.2, g=0.6, b=1.0, a=0.7)
@@ -238,26 +282,43 @@ class PlyMarkerPublisher(Node):
                 m.points.append(p)
                 m.colors.append(c)
 
+        cloud = self._make_cloud(vertices)
+
         self.get_logger().info(
             f'[mesh] loaded {path}  ({len(vertices)} verts, {len(faces)} faces)')
-        return m
+        return m, cloud
 
     def _load_coverage(self, path, ns, marker_id):
         """Per-face colour marker from PLY face RGB (BGR stored by detection node)."""
         # FIX: existence check first
         if not self._check_path(path):
-            return None
+            return None, None
 
         try:
             vertices, faces, face_colors = _parse_ply(path)
         except Exception as e:
             self.get_logger().error(f'Failed to parse {path}: {e}')
-            return None
+            return None, None
 
         m = self._base_marker(ns, marker_id)
 
         # fallback colour if PLY has no face colours
         default_c = ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.85)
+
+        vertex_color_map = None
+        if face_colors:
+            cloud_points = []
+            for i, face in enumerate(faces):
+                bgr = face_colors[i] if i < len(face_colors) else (128, 128, 128)
+                rgb = (bgr[2], bgr[1], bgr[0])
+                for vi in face:
+                    vertex = vertices[vi]
+                    cloud_points.append((vertex[0], vertex[1], vertex[2], rgb[0], rgb[1], rgb[2]))
+            cloud = self._make_cloud(
+                [(x, y, z) for x, y, z, *_ in cloud_points],
+                [(r, g, b) for *_, r, g, b in cloud_points])
+        else:
+            cloud = self._make_cloud(vertices)
 
         for i, face in enumerate(faces):
             if face_colors and i < len(face_colors):
@@ -280,7 +341,7 @@ class PlyMarkerPublisher(Node):
         self.get_logger().info(
             f'[coverage] loaded {path}  ({len(vertices)} verts, {len(faces)} faces, '
             f'colours={"yes" if face_colors else "no"})')
-        return m
+        return m, cloud
 
     # ── timer callback ────────────────────────────────────────────────────────
 
@@ -292,6 +353,12 @@ class PlyMarkerPublisher(Node):
         if self.coverage_marker:
             self.coverage_marker.header.stamp = now
             self.coverage_pub.publish(self.coverage_marker)
+        if self.mesh_cloud:
+            self.mesh_cloud.header.stamp = now
+            self.mesh_cloud_pub.publish(self.mesh_cloud)
+        if self.coverage_cloud:
+            self.coverage_cloud.header.stamp = now
+            self.coverage_cloud_pub.publish(self.coverage_cloud)
 
 
 def main(args=None):

@@ -24,9 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # CHANGE THIS LINE to point to your actual file
+            'defect = ob_detection.Defect_detection_with_Coverage_Map:main',
             'detect = ob_detection.detection_node_fixed:main',
-            # If you want to keep both, add another entry
             'segmentation_spray = ob_detection.detection_node_fixed:main',
             'ply_marker_pub = ob_detection.ply_marker_pub:main',
         ],

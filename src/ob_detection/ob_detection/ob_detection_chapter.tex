@@ -1,0 +1,200 @@
+\graphicspath{{figures/ob_detection/}{./figures/ob_detection/}{../figures/ob_detection/}}
+
+\newcommand{\resultfigure}[3]{%
+  \begin{figure}[htbp]
+    \centering
+    \IfFileExists{#1}{%
+      \includegraphics[width=#2]{#1}%
+    }{%
+      \IfFileExists{figures/ob_detection/#1}{%
+        \includegraphics[width=#2]{figures/ob_detection/#1}%
+      }{%
+        \IfFileExists{./figures/ob_detection/#1}{%
+          \includegraphics[width=#2]{./figures/ob_detection/#1}%
+        }{%
+          \IfFileExists{../figures/ob_detection/#1}{%
+            \includegraphics[width=#2]{../figures/ob_detection/#1}%
+          }{%
+            \fbox{\parbox[c][0.28\textheight][c]{0.95\linewidth}{\centering\footnotesize Placeholder figure:\\#3}}%
+          }%
+        }%
+      }%
+    }%
+    \caption{#3}
+  \end{figure}
+}
+
+\chapter{Computer Vision and Applications}
+
+\section{Roboflow for Dataset Preparation}
+The perception module of this work was built around a supervised object-detection pipeline. To train the detection model, the dataset was created and annotated using Roboflow, a web-based platform that allows image upload, labeling, preprocessing, augmentation, and export to training formats. Roboflow was used to organize the images of the car parts, define the relevant classes, and prepare the dataset in a form suitable for training a YOLO-based detector. In this work, the website was also used to structure the dataset into a consistent annotation format and to prepare the images before training, which made the subsequent model development more systematic and reproducible.
+
+\begin{figure} [H]
+    \centering
+    \includegraphics[width=0.4\linewidth]{figures/roboflow.png}
+    \caption{Roboflow dataset snippet}
+    \label{fig:initial_one_angle}
+\end{figure}
+
+\section{YOLO-Based Detection Model}
+You Only Look Once (YOLO) is a real-time object-detection framework that predicts both class labels and bounding boxes in a single forward pass. Its main advantage is that it performs detection very efficiently, making it well suited for robotic perception systems where rapid image processing is required. In this project, a lightweight YOLOv8n detector was used as the primary visual front-end for identifying the relevant car-part regions in the camera stream. YOLOv8n was selected because it offers a good balance between accuracy, inference speed, and computational cost, which is important when the detection stage must run continuously in a ROS 2-based perception pipeline.
+
+After training on the Roboflow-prepared dataset, the YOLOv8n model was integrated into the detection node as the first stage of the perception pipeline. It produces bounding boxes and, when available, segmentation masks that localize the target surface in the image. These detections are then used to build a binary mask of the part region, which is subsequently refined and converted into a spray trajectory. In practice, the model is therefore not only responsible for object recognition, but also for supplying the geometry needed for the downstream path-planning and inspection modules.
+
+\section{Introduction}
+This chapter focuses on the two central functions of the ob\_detection system: detecting the target surface and generating an accurate spray path. In this work, detection and path planning are the primary contribution, while defect detection is treated as a secondary module that supports the final inspection of the painted result.
+
+\section{Main Objective}
+The main objective of the system is to locate the car part region of interest, extract its geometry, and convert this information into a trajectory that allows the spray nozzle to cover the surface accurately. The perception pipeline therefore serves as the foundation for the path-planning stage, and the generated path is the key output of the system.
+
+\section{Pipeline Overview}
+The processing workflow can be summarized in four main stages:
+\begin{enumerate}
+  \item Image acquisition and preprocessing from the perception sensor.
+  \item Detection and segmentation of the target surface and its boundaries.
+  \item Generation of a spray path based on the detected geometry.
+  \item Secondary defect and coverage evaluation for quality inspection.
+\end{enumerate}
+
+\section{Detection and Path Planning}
+The detection stage uses images and optional depth or point-cloud information to identify the panel, segment the relevant region, and extract its shape. From this representation, the system generates a square spiral or ring-based spray path that follows the contour of the part. This path-planning step is the core functionality of the module because it directly determines how the robot covers the surface.
+
+\section{Defect Detection}
+Although the main purpose of the system is detection and trajectory generation, defect detection is still an important supporting function. Once the main path has been planned, the system can evaluate the painted surface by analyzing coverage quality, highlighting weak or under-coated regions, and producing visual overlays that assist in quality assessment. In this sense, defect detection is secondary to the motion-planning objective but remains valuable for final inspection.
+
+\section{Software Components}
+The implementation is distributed across several modules that jointly form the perception and inspection pipeline:
+\begin{itemize}
+  \item \texttt{Defect\_detection\_with\_Coverage\_Map.py} performs image preprocessing, ROI extraction, HSV-based paint segmentation, and grid-based coverage analysis. It is mainly used for secondary quality inspection and visual evaluation of the sprayed surface.
+  \item \texttt{detection\_node\_fixed.py} is the main ROS 2 processing node. It subscribes to the camera stream, depth stream, and optional point-cloud data, loads the trained YOLO model, performs part detection and segmentation, and generates the spray paths used by the robot.
+  \item \texttt{sensorstream\_driver} provides the raw perception inputs to the system. It publishes RGB frames, depth images, and point clouds from the iPhone camera to ROS 2 topics such as \texttt{/color\_image/compressed}, \texttt{/depth\_image}, and \texttt{/pointcloud}, which are then consumed by the detection node.
+  \item The launch configuration files in the launch directory are used to start the inspection and detection nodes in the robotic environment and to connect them to the appropriate sensor topics.
+\end{itemize}
+
+\section{Use of SensorStream and Camera Placement}
+The perception pipeline relies on the \texttt{sensorstream\_driver} package to stream data from the iPhone camera into the ROS 2 environment. The camera is not mounted directly at the end effector; therefore, the system uses calibration parameters and geometric transformations between the camera frame and the robot tool frame to compensate for the offset. These calculations ensure that the detected part geometry and the planned trajectory remain spatially consistent, so the robot can execute the intended spray path with sufficient accuracy.
+
+\section{Implementation Details and Algorithmic Snippets}
+A key part of the implementation is the conversion of the detected part mask into a continuous trajectory that follows the shape of the target surface. The path-planning module first extracts the contour of the mask and then repeatedly shrinks it inward to generate concentric rings. This idea is implemented in the contour-shrinking and path-generation routines shown below.
+
+Another important part of the detection node is the use of LiDAR depth information to estimate the distance to the detected surface. The node subscribes to the depth stream, stores it as a 16-bit image in millimetres, and then maps each detected image pixel into the corresponding depth image coordinate before sampling the local neighbourhood around that point. This allows the system to estimate the depth of the detected panel rather than relying on the camera image alone. In the implementation, the depth image is converted from millimetres to metres, and the median depth in a small region of interest is used to reduce noise from isolated invalid or outlier values.
+
+\begin{verbatim}
+def color_to_depth_pixel(self, x, y, img_w, img_h, depth_w, depth_h):
+    sx = self.depth_scale_x if self.depth_scale_x > 0 else depth_w / max(img_w, 1)
+    sy = self.depth_scale_y if self.depth_scale_y > 0 else depth_h / max(img_h, 1)
+    u = int(round(x * sx + self.depth_offset_x_px))
+    v = int(round(y * sy + self.depth_offset_y_px))
+    return u, v
+
+
+def depth_at_color_pixel(self, x, y, img_w, img_h, depth_img):
+    depth_h, depth_w = depth_img.shape[:2]
+    u, v = self.color_to_depth_pixel(x, y, img_w, img_h, depth_w, depth_h)
+    roi = max(0, int(self.depth_roi_px))
+    x1 = max(0, u - roi)
+    x2 = min(depth_w, u + roi + 1)
+    y1 = max(0, v - roi)
+    y2 = min(depth_h, v + roi + 1)
+    samples_m = depth_img[y1:y2, x1:x2].astype(np.float32) / 1000.0
+    valid = samples_m[(samples_m >= self.min_depth_m) &
+                      (samples_m <= self.max_depth_m) &
+                      np.isfinite(samples_m)]
+    return float(np.median(valid))
+\end{verbatim}
+
+In this formulation, the depth value is effectively estimated as the median of the valid neighbouring samples, which makes the measurement more robust to noise and small calibration mismatch between the RGB and depth frames. The resulting depth can then be used to support the spatial interpretation of the detected part and to improve the consistency of the generated spray trajectory.
+
+\begin{verbatim}
+def shrink_contour(contour_pts, amount):
+    x, y, w, h = cv2.boundingRect(contour_pts.reshape(-1, 1, 2))
+    canvas = np.zeros((h + pad*2, w + pad*2), dtype=np.uint8)
+    cv2.fillPoly(canvas, [shifted.reshape(-1, 1, 2)], 255)
+    eroded = cv2.erode(canvas, kernel, iterations=1)
+    contours, _ = cv2.findContours(eroded, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_NONE)
+
+after this, the path is generated by resampling each ring and connecting it to the next one.
+\end{verbatim}
+
+\begin{verbatim}
+def generate_square_spiral(mask_binary, spacing_px=20):
+    contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_NONE)
+    current_contour = max(contours, key=cv2.contourArea).squeeze()
+    while True:
+        ring_pts = resample_contour(current_contour, spacing=spacing_px)
+        all_points.extend(ring_pts)
+        next_contour = shrink_contour(..., amount=offset)
+        current_contour = next_contour
+\end{verbatim}
+
+Another important step is the removal of reflective window regions from the detected car-part mask. In practice, windows are often detected as bright regions because of glare and reflection, so the system first identifies them using a brightness threshold and then subtracts them from the mask before the spray path is planned.
+
+\begin{verbatim}
+def remove_bright_regions(mask_bin, frame, brightness_threshold=200):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    bright_mask = (gray > brightness_threshold).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    bright_expanded = cv2.dilate(bright_mask, kernel, iterations=2)
+    cleaned_mask = mask_bin.copy()
+    cleaned_mask[bright_expanded > 0] = 0
+    return cleaned_mask
+\end{verbatim}
+
+In the full pipeline, this function is applied to each detected mask, and for door-like objects the corresponding window masks are also subtracted to avoid spraying over glass surfaces.
+
+\section{Coverage and Defect Analysis}
+The algorithm uses HSV color thresholds to distinguish painted from unpainted areas inside the detected panel region. A grid is then overlaid on the surface, and each cell is scored according to the amount of paint detected. This provides a compact quantitative evaluation of whether the panel is fully covered or contains weak regions. In the implementation, the coverage percentage of each cell is computed from the ratio between painted pixels and valid ROI pixels, namely
+
+$$
+\text{cell coverage} = \frac{\text{countNonZero(cell\_paint)}}{\text{countNonZero(cell\_roi)}} \times 100\%.
+$$
+
+The overall coverage score is then obtained by averaging the covered cells over the total valid cells,
+
+$$
+\text{overall coverage} = \frac{\text{covered\_cells}}{\text{total\_cells}} \times 100\%.
+$$
+
+These calculations make the inspection stage quantitative rather than purely visual, and they provide a clear metric for deciding whether the sprayed region has acceptable coverage or whether additional passes are needed.
+
+\section{Representative Outputs}
+The figures below illustrate the primary stages of the system:
+\begin{itemize}
+  \item Defect detection and inspection overlay.
+  \item Detection-based path planning with the generated square spiral trajectory.
+  \item The saved directory and output files produced by the path-planning module.
+  \item Forward-kinematics comparison of desired trajectory vs. executed waypoints.
+\end{itemize}
+
+\begin{figure} [H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{figures/defect_detection_result.png}
+    \caption{Defect detection result showing the inspected part}
+    \label{fig:initial_one_angle}
+\end{figure}
+\begin{figure} [H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{figures/detection_path_planning.png}
+    \caption{Detection and path-planning result.}
+    \label{fig:initial_one_angle}
+\end{figure}
+\begin{figure} [H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{figures/path_planning_save_directory.png}
+    \caption{Saved path-planning output directory}
+    \label{fig:initial_one_angle}
+\end{figure}
+\begin{figure} [H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{figures/fk_comparison.png}
+    \caption{Desired trajectory versus forward-kinematics (FK) reconstructed trajectory}
+    \label{fig:initial_one_angle}
+\end{figure}
+
+\section{Results and Discussion}
+The obtained results demonstrate that the proposed system can reliably detect the target region, generate an accurate spray path, and provide additional inspection feedback. The main contribution is therefore the integration of perception and path planning, while defect detection remains a useful secondary function for identifying weak or irregular painted areas.
+
+\section{Conclusion}
+The ob\_detection module is an important part of the car-spraying pipeline because it transforms raw sensor data into actionable information for both motion planning and quality assessment. Its combination of detection, path generation, and secondary defect inspection makes it a valuable component of the overall automation system.
