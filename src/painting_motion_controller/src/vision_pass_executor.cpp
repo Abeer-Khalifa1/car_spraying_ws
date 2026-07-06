@@ -93,20 +93,12 @@ int main(int argc, char * argv[])
   );
 
   // ── Legacy Point-based correction queue: unused for the vision agent ──
-  // vision_rl_agent_node.py only ever publishes Path + action messages,
-  // never legacy /spray/rl_target Points, so this queue simply never has
-  // work. It exists only because run_correction_pass()'s signature is
-  // shared with the sim controller.
   std::queue<geometry_msgs::msg::Point> unused_legacy_queue;
   std::mutex unused_legacy_mutex;
   std::atomic<float> unused_standoff{0.20f};
   std::atomic<float> unused_flow{0.50f};
 
   // ── spray_enabled: vision agent has no /spray/enable-style gate today.
-  // Always true here — spray is only ever forced off by run_correction_pass
-  // itself between strokes. If you later want the vision agent to be able
-  // to disable spray (mirroring /spray/enable for the sim agent), add a
-  // /spray/vision_enable subscriber here and wire it into this atomic.
   std::atomic<bool> spray_enabled{true};
 
   // ── Publishers (same topics the main controller publishes to) ─────────
@@ -133,8 +125,6 @@ int main(int argc, char * argv[])
   move_group.setMaxAccelerationScalingFactor(0.1);
 
   // ── Surface waypoints — loaded only for legacy-correction normal lookup.
-  // Harmless if unused; kept for signature compatibility and in case you
-  // later add legacy Point corrections to the vision agent too.
   std::string file_path = node->has_parameter("csv_path")
     ? node->get_parameter("csv_path").as_string()
     : std::string{};
@@ -146,8 +136,6 @@ int main(int argc, char * argv[])
   std::vector<SurfaceWaypoint> surface_waypoints =
     load_surface_waypoints(file_path, node->get_logger());
   // Not fatal if empty here — the vision agent doesn't use legacy
-  // corrections in practice, so an empty lookup table just means the
-  // (never-exercised) fallback normal of +X would be used.
 
   // ── Wait for PASS 1 to finish (with 120s timeout) ────────────────────
   RCLCPP_INFO(node->get_logger(), "vision_pass_executor: waiting for /spray/pass1_done...");
