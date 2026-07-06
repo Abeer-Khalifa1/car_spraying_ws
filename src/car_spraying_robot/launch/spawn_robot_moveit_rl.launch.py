@@ -281,7 +281,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 8 — square_xz_node  (reads validated CSV via csv_path param)
+    # STEP 8 — cartesian_trajectory_controller (reads validated CSV via csv_path param)
     # ═══════════════════════════════════════════════════════════════════════════
 
     trajectory_node = Node(

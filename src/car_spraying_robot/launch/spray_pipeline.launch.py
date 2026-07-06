@@ -7,17 +7,16 @@ from launch.actions import (
     TimerAction,
     RegisterEventHandler,
     EmitEvent,
-    LogInfo,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
-# ── Workspace-root paths ──────────────────────────────────────────────────────
+# Workspace-root paths
 _WS = "/home/user/car_spraying_ws/src"
 
 SDF_PATH      = f"{_WS}/car_spraying_robot/models/Spraying_Arm_moveit.sdf"
@@ -39,17 +38,18 @@ def _find_ply(filename: str) -> str:
         if os.path.isfile(p):
             return p
     print(
-        f"[full_system.launch] WARNING: '{filename}' not found — "
+        f"[spray_pipeline.launch] WARNING: '{filename}' not found — "
         f"ply_marker_publisher will start but publish no markers."
     )
     return os.path.join(_PLY_SEARCH_DIRS[0], filename)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 
 def generate_launch_description() -> LaunchDescription:
 
-    # ── MoveIt config ─────────────────────────────────────────────────────────
+    pkg = 'car_spraying_robot'
+
+    # MoveIt config 
     moveit_config = (
         MoveItConfigsBuilder(
             "car_spraying_robot",
@@ -84,7 +84,7 @@ def generate_launch_description() -> LaunchDescription:
         description='Gazebo world name — must match <world name=...> in SDF')
 
     arg_cone_len = DeclareLaunchArgument(
-        'cone_length', default_value='0.21',
+        'cone_length', default_value='0.20',
         description='Spray cone length [m]')
 
     arg_half_angle = DeclareLaunchArgument(
@@ -98,10 +98,6 @@ def generate_launch_description() -> LaunchDescription:
     arg_spray_active = DeclareLaunchArgument(
         'spray_active', default_value='true',
         description='Start with spray on (true/false)')
-
-    arg_enable_rl = DeclareLaunchArgument(
-        'enable_rl', default_value='true',
-        description='Launch the RL agent node for PASS 2 defect correction')
 
     arg_enable_ply = DeclareLaunchArgument(
         'enable_ply', default_value='true',
@@ -119,11 +115,16 @@ def generate_launch_description() -> LaunchDescription:
         'mesh_frame', default_value='camera_color_optical_frame',
         description='TF frame the PLY meshes were captured in')
 
+    correction_mode = LaunchConfiguration('correction_mode')
+    declare_mode = DeclareLaunchArgument(
+        'correction_mode',
+        default_value='vision',
+        description="Which corrective pass to run after PASS 1: 'sim' or 'vision'. "
+                    "Never both — they are alternatives.",
+    )
+
     # ═══════════════════════════════════════════════════════════════════════════
     # STEP 0 — filter_and_forward  (BLOCKING GATE)
-    # Runs first, exits immediately.
-    # Exit code 0 → validation passed, rest of launch continues normally.
-    # Exit code 1 → too many unsafe points, handler emits Shutdown.
     # ═══════════════════════════════════════════════════════════════════════════
 
     filter_node = Node(
@@ -139,24 +140,19 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
-    # ── KEY FIX: only emit Shutdown when returncode != 0 ─────────────────────
-    # OnProcessExit fires for every exit (including clean exit 0).
-    # We guard with a lambda that checks event.returncode before acting.
     def _on_filter_exit(event, context):
         if event.returncode != 0:
-            # Trajectory was rejected — kill the whole launch
             print(
                 '\n'
                 '╔══════════════════════════════════════════════════════════╗\n'
-                '║  filter_and_forward: trajectory REJECTED                ║\n'
-                '║  Too many waypoints outside the workspace.              ║\n'
-                '║  Fix peya.csv or raise the threshold.                   ║\n'
-                '║  Aborting — Gazebo will NOT be started.                 ║\n'
+                '║  filter_and_forward: trajectory REJECTED                 ║\n'
+                '║  Too many waypoints outside the workspace.               ║\n'
+                '║  Fix peya.csv or raise the threshold.                    ║\n'
+                '║  Aborting — Gazebo will NOT be started.                  ║\n'
                 '╚══════════════════════════════════════════════════════════╝'
             )
             return [EmitEvent(event=Shutdown(
                 reason='Trajectory validation failed — path out of reach'))]
-        # returncode == 0: validation passed, do nothing — launch continues
         return []
 
     shutdown_on_filter_fail = RegisterEventHandler(
@@ -176,7 +172,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 2 — ROS-GZ Bridge   (t=3 s)
+    # STEP 2 — ROS-GZ Bridge
     # ═══════════════════════════════════════════════════════════════════════════
 
     bridge = Node(
@@ -188,7 +184,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 3 — Robot State Publisher + static TF   (t=4 s)
+    # STEP 3 — Robot State Publisher + static TF
     # ═══════════════════════════════════════════════════════════════════════════
 
     rsp = Node(
@@ -208,7 +204,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 4 — MoveGroup   (t=5 s)
+    # STEP 4 — MoveGroup
     # ═══════════════════════════════════════════════════════════════════════════
 
     move_group = Node(
@@ -281,7 +277,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 8 — cartesian_trajectory_controller (reads validated CSV via csv_path param)
+    # STEP 8 — cartesian_trajectory_controller
     # ═══════════════════════════════════════════════════════════════════════════
 
     trajectory_node = Node(
@@ -351,11 +347,95 @@ def generate_launch_description() -> LaunchDescription:
         package='car_spraying_spray_sim',
         executable='coverage_quality_node',
         name='coverage_quality_node',
+
         output='screen',
         parameters=[{
             'use_sim_time':   True,
             'trajectory_csv': LaunchConfiguration('validated_csv_path'),
         }],
+    )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 12 — PASS 2 correction: sim RL  OR  vision stack (never both)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    sim_rl_node = Node(
+        package='painting_motion_controller',
+        executable='rl_agent_node',
+        name='rl_agent',
+        output='screen',
+        parameters=[{
+            'use_sim_time': True,
+            'csv_path':     LaunchConfiguration('validated_csv_path'),
+        }],
+        condition=IfCondition(
+            PythonExpression(["'", correction_mode, "' == 'sim'"])
+        ),
+    )
+
+    sensorstream_driver_node = Node(
+        package='sensorstream_driver',
+        executable='sensorstream_node',
+        name='sensorstream_driver',
+        output='screen',
+        condition=IfCondition(
+            PythonExpression(["'", correction_mode, "' == 'vision'"])
+        ),
+    )
+
+    vision_defect_node = Node(
+        package='ob_detection',
+        executable='defect_detection_connected',
+        name='vision_defect_detection',
+        output='screen',
+        condition=IfCondition(
+            PythonExpression(["'", correction_mode, "' == 'vision'"])
+        ),
+    )
+
+    vision_stream_window_node = Node(
+        package='ob_detection',
+        executable='vision_stream_window',
+        name='vision_stream_window',
+        output='screen',
+        parameters=[{
+            'camera_topic': '/color_image/compressed',
+            'window_name': 'vision_camera_stream',
+        }],
+        condition=IfCondition(
+            PythonExpression(["'", correction_mode, "' == 'vision'"])
+        ),
+    )
+
+    vision_rl_node = Node(
+        package='painting_motion_controller',
+        executable='vision_rl_agent_node',
+        name='vision_rl_agent',
+        output='screen',
+        parameters=[{
+            'y_min': -0.20, 'y_max': 0.00,
+            'z_min': 0.45,  'z_max': 0.70,
+        }],
+        condition=IfCondition(
+            PythonExpression(["'", correction_mode, "' == 'vision'"])
+        ),
+    )
+
+    vision_pass_executor_node = Node(
+        package='painting_motion_controller',
+        executable='vision_pass_executor',
+        name='vision_pass_executor',
+        output='screen',
+        parameters=[
+            moveit_config.robot_description,
+            moveit_config.robot_description_semantic,
+            moveit_config.robot_description_kinematics,
+            sim_time,
+            {"csv_path": LaunchConfiguration('validated_csv_path')},
+        ],
+        condition=IfCondition(
+            PythonExpression(["'", correction_mode, "' == 'vision'"])
+        ),
     )
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -367,13 +447,14 @@ def generate_launch_description() -> LaunchDescription:
         # Arguments
         arg_csv, arg_val_csv, arg_threshold,
         arg_gz_world, arg_cone_len, arg_half_angle, arg_sigma, arg_spray_active,
-        arg_enable_rl, arg_enable_ply, arg_mesh_ply, arg_coverage_ply, arg_mesh_frame,
+        arg_enable_ply, arg_mesh_ply, arg_coverage_ply, arg_mesh_frame,
+        declare_mode,
 
         # STEP 0 — validate CSV first (gate)
         filter_node,
         shutdown_on_filter_fail,
 
-        # STEP 1 — Gazebo (small delay so filter prints its report cleanly)
+        # STEP 1 — Gazebo
         TimerAction(period=1.0,  actions=[gazebo]),
 
         # STEP 2 — Bridge
@@ -395,14 +476,20 @@ def generate_launch_description() -> LaunchDescription:
         # STEP 7 — PLY mesh viewer
         TimerAction(period=10.0, actions=[ply_publisher]),
 
-        # STEP 8 — Trajectory executor
+        # STEP 8 — Trajectory executor (PASS 1)
         TimerAction(period=16.0, actions=[trajectory_node]),
 
-        # STEPS 9–12 — Spray + Coverage + RL
+        # STEP 9-11 — Spray + Coverage
         TimerAction(period=18.0, actions=[
             spray_sim,
             coverage_map_node,
             coverage_quality_node,
-            # rl_agent_node,
         ]),
+
+        # STEP 12 — PASS 2 correction (sim or vision, buffer so
+        # controller/vision inputs are up before probing them)
+        TimerAction(period=20.0, actions=[sim_rl_node]),
+        TimerAction(period=19.0, actions=[sensorstream_driver_node]),
+        TimerAction(period=20.0, actions=[vision_defect_node, vision_stream_window_node, vision_rl_node]),
+        TimerAction(period=21.0, actions=[vision_pass_executor_node]),
     ])
