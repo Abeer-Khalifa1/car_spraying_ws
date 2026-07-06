@@ -32,7 +32,7 @@ class VisionStreamWindow(Node):
                 f'No display available for window "{self.window_name}": {exc}. '
                 f'The node will still listen to {self.camera_topic} and log frames.'
             )
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except Exception as exc:
             self._display_available = False
             self.get_logger().warn(f'Could not create display window: {exc}')
 
@@ -47,29 +47,26 @@ class VisionStreamWindow(Node):
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if frame is not None:
                 self._latest_frame = frame
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except Exception as exc:
             self.get_logger().warn(f'Failed to decode compressed image: {exc}')
 
     def _draw_frame(self) -> None:
-        if self._latest_frame is None:
-            return
-        if not self._display_available:
+        if self._latest_frame is None or not self._display_available:
             return
         try:
             cv2.imshow(self.window_name, self._latest_frame)
             cv2.waitKey(1)
         except cv2.error as exc:
-            # Display server may not be available (headless environment)
             self.get_logger().warn(
-                f'Cannot display window (no display server?): {exc} — '
-                f'stream is still being processed, check with ros2 topic echo')
-        except Exception as exc:  # pragma: no cover - defensive logging
+                f'Cannot display window: {exc}. Stream frames are still being received.'
+            )
+        except Exception as exc:
             self.get_logger().warn(f'Failed to display frame: {exc}')
 
     def destroy_node(self):
         try:
             cv2.destroyWindow(self.window_name)
-        except Exception:  # pragma: no cover - defensive logging
+        except Exception:
             pass
         super().destroy_node()
 

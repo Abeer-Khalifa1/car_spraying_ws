@@ -373,20 +373,20 @@ def generate_launch_description() -> LaunchDescription:
         ),
     )
 
-    sensorstream_driver_node = Node(
-        package='sensorstream_driver',
-        executable='sensorstream_node',
-        name='sensorstream_driver',
-        output='screen',
-        condition=IfCondition(
-            PythonExpression(["'", correction_mode, "' == 'vision'"])
-        ),
-    )
+    # sensorstream_driver_node = Node(
+    #     package='sensorstream_driver',
+    #     executable='sensorstream_node',
+    #     name='sensorstream_driver',
+    #     output='screen',
+    #     condition=IfCondition(
+    #         PythonExpression(["'", correction_mode, "' == 'vision'"])
+    #     ),
+    # )
 
     vision_defect_node = Node(
         package='ob_detection',
-        executable='defect_detection_connected',
-        name='vision_defect_detection',
+        executable='defect',
+        name='defect_detection_node',
         output='screen',
         condition=IfCondition(
             PythonExpression(["'", correction_mode, "' == 'vision'"])
@@ -489,7 +489,7 @@ def generate_launch_description() -> LaunchDescription:
         # STEP 12 — PASS 2 correction (sim or vision, buffer so
         # controller/vision inputs are up before probing them)
         TimerAction(period=20.0, actions=[sim_rl_node]),
-        TimerAction(period=19.0, actions=[sensorstream_driver_node]),
+        # TimerAction(period=19.0, actions=[sensorstream_driver_node]),
         TimerAction(period=20.0, actions=[vision_defect_node, vision_stream_window_node, vision_rl_node]),
         TimerAction(period=21.0, actions=[vision_pass_executor_node]),
     ])

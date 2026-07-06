@@ -12,8 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'launch'), glob('ob_detection/launch/*.py')),
+        (os.path.join('share', package_name, 'config'), glob('ob_detection/config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,8 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'defect = ob_detection.Defect_detection_with_Coverage_Map_connected:main',
-            'defect_detection_connected = ob_detection.Defect_detection_with_Coverage_Map_connected:main',
+            'defect = ob_detection.Defect_detection_with_Coverage_Map:main',
             'detect = ob_detection.detection_node_fixed:main',
             'segmentation_spray = ob_detection.detection_node_fixed:main',
             'ply_marker_pub = ob_detection.ply_marker_pub:main',

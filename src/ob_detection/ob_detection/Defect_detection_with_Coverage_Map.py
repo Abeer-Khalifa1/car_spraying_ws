@@ -11,9 +11,9 @@ from ultralytics import YOLO
 try:
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+    from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
     from sensor_msgs.msg import CompressedImage
-    from std_msgs.msg import Float32MultiArray
+    from std_msgs.msg import Float32MultiArray, Bool
     ROS_AVAILABLE = True
 except Exception:
     ROS_AVAILABLE = False
@@ -52,18 +52,8 @@ class SprayQualityInspectorV2:
         self.paint_lower = PAINT_HSV_LOWER.copy()
         self.paint_upper = PAINT_HSV_UPPER.copy()
 
-        # --- stability state (FIX) -----------------------------------
-        # The old code re-decided "use configured color vs. adaptive
-        # dominant-hue color" independently every single frame, with no
-        # memory between frames. Any per-frame noise (lighting flicker,
-        # compression artifacts, etc.) could flip that decision, which is
-        # why the mask used to look completely different frame-to-frame
-        # ("sometimes masks everything, sometimes mixes").
-        #
-        # Now we require several consecutive low-detection frames before
-        # switching to adaptive mode, and once adaptive mode locks onto a
-        # hue range we keep reusing that same range instead of re-deriving
-        # a (possibly different) dominant color every frame.
+
+
         self._adaptive_locked = False
         self._adaptive_lower = None
         self._adaptive_upper = None
@@ -76,7 +66,7 @@ class SprayQualityInspectorV2:
         self._drip_ema_alpha = 0.3
 
     # -----------------------------
-    # 1. Preprocessing (FIXED LIGHTING)
+    # 1. Preprocessing 
     # -----------------------------
     def preprocess(self, img):
         img = cv2.resize(img, (640, 640))
@@ -85,13 +75,6 @@ class SprayQualityInspectorV2:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
 
-        # FIX: cv2.equalizeHist() stretches contrast using the FULL frame's
-        # histogram, which changes based on whatever else is in view. That
-        # means the same physical paint color gets remapped to different
-        # pixel values from one frame to the next, which is exactly what
-        # was making the fixed HSV paint range randomly stop matching (and
-        # made the drip-edge detector noisy). CLAHE applies a clipped,
-        # localized equalization that is far more repeatable frame-to-frame.
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         l = clahe.apply(l)
 
@@ -101,10 +84,6 @@ class SprayQualityInspectorV2:
         gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV)
 
-        # FIX: a dedicated, lightly-blurred grayscale specifically for edge
-        # detection (drips). Any contrast normalization amplifies small
-        # sensor noise into fake "edges"; a small blur removes that without
-        # meaningfully blurring an actual drip streak.
         edge_gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
         return norm, hsv, gray, edge_gray
@@ -139,31 +118,25 @@ class SprayQualityInspectorV2:
         detected_px = int(np.count_nonzero(paint_mask))
         low_detection = detected_px < max(50, int(roi_area * 0.02))
 
-        # FIX: hysteresis instead of an instant per-frame switch. Only
-        # count consecutive failures, and only act once we've seen enough
-        # of them in a row to trust it's a real color mismatch and not one
-        # noisy frame.
+
         if low_detection:
             self._adaptive_fail_count += 1
         else:
             self._adaptive_fail_count = 0
             self._adaptive_locked = False  # configured color is working again
 
-        if low_detection and self._adaptive_fail_count >= self._adaptive_lock_frames:
-            if not self._adaptive_locked:
+        if low_detection:
+            if self._adaptive_locked:
+                paint_mask = self._hue_mask(hsv, self._adaptive_lower, self._adaptive_upper)
+                paint_mask = cv2.bitwise_and(paint_mask, paint_mask, mask=roi_mask)
+            else:
                 learned = self.adaptive_paint_mask(hsv, roi_mask, return_bounds=True)
                 if learned is not None:
                     mask_candidate, low_h, high_h = learned
-                    self._adaptive_lower, self._adaptive_upper = low_h, high_h
-                    self._adaptive_locked = True
                     paint_mask = mask_candidate
-            else:
-                # FIX: reuse the previously locked hue range instead of
-                # re-deriving a new (possibly different) dominant hue every
-                # single frame — this is what used to cause the mask to
-                # "mix" between different regions frame to frame.
-                paint_mask = self._hue_mask(hsv, self._adaptive_lower, self._adaptive_upper)
-                paint_mask = cv2.bitwise_and(paint_mask, paint_mask, mask=roi_mask)
+                    if self._adaptive_fail_count >= self._adaptive_lock_frames:
+                        self._adaptive_lower, self._adaptive_upper = low_h, high_h
+                        self._adaptive_locked = True
 
         # 3) Morphological cleanup (fill small gaps, remove specks)
         kernel = np.ones((5, 5), np.uint8)
@@ -268,10 +241,6 @@ class SprayQualityInspectorV2:
         if roi_pixels.size == 0:
             return None if return_bounds else np.zeros_like(roi_mask)
 
-        # FIX: only consider reasonably saturated/bright pixels when picking
-        # the "dominant" hue. Without this, the dominant color in a mostly
-        # unpainted ROI is often shadow, glare, or bare metal — not paint —
-        # so the fallback would lock onto the wrong thing entirely.
         saturated = roi_pixels[(roi_pixels[:, 1] > 60) & (roi_pixels[:, 2] > 60)]
         hue_pixels = (saturated[:, 0]
                       if saturated.size > int(0.1 * roi_pixels.shape[0])
@@ -326,18 +295,12 @@ class SprayQualityInspectorV2:
     # 5. DRIP DETECTION (Hough-based)
     # -----------------------------
     def detect_drips(self, gray, mask):
-        # FIX: `gray` passed in here is now the pre-blurred edge_gray from
-        # preprocess(), which removes the fake "edges" that contrast
-        # normalization used to introduce as noise.
+
         edges = cv2.Canny(gray, 80, 180)
         edges = cv2.bitwise_and(edges, edges, mask=mask)
 
         roi_area = max(int(np.count_nonzero(mask)), 1)
 
-        # FIX: scale the minimum line length to the ROI's actual size
-        # instead of a fixed 40px. A fixed length either lets tiny noise
-        # segments count as "drips" on a small part, or never fires at all
-        # on a small part where a real drip is naturally shorter.
         min_len = max(25, int(0.08 * np.sqrt(roi_area)))
 
         lines = cv2.HoughLinesP(
@@ -452,7 +415,7 @@ class SprayQualityInspectorV2:
         grid_coverage, grid_pct, paint_mask, grid_vis = self.detect_binary_coverage(hsv, mask)
         defect_matrix = self.build_defect_matrix(grid_pct)
 
-        save_dir = "/home/user/car_spraying_ws_6_7/car_spraying_ws/src/ob_detection/ob_detection/spray_paths"
+        save_dir = os.path.join(os.path.dirname(__file__), "spray_paths")
         os.makedirs(save_dir, exist_ok=True)
 
         np.save(
@@ -477,7 +440,7 @@ class SprayQualityInspectorV2:
             "defect_matrix": defect_matrix.tolist(),
         }
 
-        return result, grid_vis, paint_mask, cov_map, drip_map, rough_map, mask, defect_matrix
+        return result, grid_vis, paint_mask, cov_map, drip_map, rough_map, mask
 
 
 # ============================================================
@@ -506,6 +469,24 @@ class ROSCameraReader(Node):
             '/spray/defect_matrix',
             10
         )
+
+        # pass1_done gating (matches vision_rl_agent_node's QoS) 
+        self._pass1_done = False
+        pass1_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        self.create_subscription(Bool, '/spray/pass1_done',
+                                 self._pass1_done_cb, pass1_qos)
+
+    def _pass1_done_cb(self, msg: Bool):
+        if msg.data and not self._pass1_done:
+            self._pass1_done = True
+            self.get_logger().info('PASS 1 complete — defect detection now active.')
+
+    def is_pass1_done(self):
+        return self._pass1_done
 
     def _camera_callback(self, msg):
         np_arr = np.frombuffer(msg.data, np.uint8)
@@ -709,10 +690,11 @@ def main(argv=None):
                         part_label = 'Part: unknown'
 
                 focus_mask = part_mask if np.count_nonzero(part_mask) > 0 else None
-                result, grid_vis, paint_mask, cov, drip, rough, mask, defect_matrix = inspector.inspect(cam_display, roi_mask=focus_mask)
+                result, grid_vis, paint_mask, cov, drip, rough, mask = inspector.inspect(cam_display, roi_mask=focus_mask)
 
                 if ros_reader is not None:
                     msg = Float32MultiArray()
+                    defect_matrix = np.asarray(result["defect_matrix"], dtype=np.float32)
                     msg.data = defect_matrix.astype(np.float32).flatten().tolist()
                     ros_reader.defect_pub.publish(msg)
 
