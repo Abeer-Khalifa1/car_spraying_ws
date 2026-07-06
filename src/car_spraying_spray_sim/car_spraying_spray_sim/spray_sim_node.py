@@ -164,7 +164,7 @@ class SpraySimNode(Node):
             f'Spray → {"ON ✓" if self._spray_on else "OFF ✗"}')
         
     def rl_action_callback(self, msg):
-        # msg.data layout published by square_xz.cpp: [standoff (m), flow (0-1)]
+        # msg.data layout published by cartesian_trajectory_controller: [standoff (m), flow (0-1)]
         # standoff maps to cone_length; flow scales sigma.
         if len(msg.data) < 2:
             return

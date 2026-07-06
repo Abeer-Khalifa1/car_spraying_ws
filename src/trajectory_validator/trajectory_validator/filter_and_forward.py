@@ -151,7 +151,7 @@ def filter_trajectory(
             f'which exceeds the {100*threshold:.0f} % threshold.\n'
             f'  The trajectory cannot be safely executed. '
             f'Check your path generator or workspace limits.\n'
-            f'  square_xz will NOT be started.'
+            f' cartesian_trajectory_controller will NOT be started.'
         )
         print(msg, file=sys.stderr)
         return {
@@ -189,7 +189,7 @@ def filter_trajectory(
         status = 'PASSED (all points safe)' if not bits else f'PASSED — {", ".join(bits)}'
         print(f'  ✓ {status}')
         print(f'  Output CSV  : {output_csv}  ({len(safe_records)} rows)')
-        print(f'  Ready for square_xz.\n')
+        print(f'  Ready for cartesian_trajectory_controller.\n')
 
     return {
         'total': total,
@@ -207,12 +207,7 @@ def filter_trajectory(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ros_main(args=None) -> None:
-    """
-    ROS 2 entry point.  Reads parameters, runs filter_trajectory(), and
-    publishes the output path on /trajectory_validator/validated_csv_path
-    with TRANSIENT_LOCAL durability so late subscribers (square_xz) can
-    receive it even if they start after this node finishes.
-    """
+
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
@@ -254,7 +249,7 @@ def ros_main(args=None) -> None:
         node.get_logger().error(
             f'Trajectory REJECTED: {result["unsafe"]}/{result["total"]} '
             f'waypoints ({100*result["unsafe_pct"]:.1f} %) out of workspace '
-            f'(threshold {100*threshold:.0f} %). square_xz will NOT start.')
+            f'(threshold {100*threshold:.0f} %). cartesian_trajectory_controller will NOT start.')
         rclpy.shutdown()
         sys.exit(1)
 

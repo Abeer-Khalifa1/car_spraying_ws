@@ -44,7 +44,7 @@ int main(int argc, char * argv[])
   rclcpp::init(argc, argv);
 
   auto node = rclcpp::Node::make_shared(
-    "square_xz_node",
+    "cartesian_trajectory_controller",
     rclcpp::NodeOptions()
       .automatically_declare_parameters_from_overrides(true)
       .append_parameter_override("use_sim_time", true)
