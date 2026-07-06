@@ -359,19 +359,6 @@ def generate_launch_description() -> LaunchDescription:
     # STEP 12 — PASS 2 correction: sim RL  OR  vision stack (never both)
     # ═══════════════════════════════════════════════════════════════════════════
 
-    sim_rl_node = Node(
-        package='painting_motion_controller',
-        executable='rl_agent_node',
-        name='rl_agent',
-        output='screen',
-        parameters=[{
-            'use_sim_time': True,
-            'csv_path':     LaunchConfiguration('validated_csv_path'),
-        }],
-        condition=IfCondition(
-            PythonExpression(["'", correction_mode, "' == 'sim'"])
-        ),
-    )
 
     # sensorstream_driver_node = Node(
     #     package='sensorstream_driver',

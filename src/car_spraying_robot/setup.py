@@ -30,8 +30,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [ 
-            'ik_square = car_spraying_robot.ik_square:main', 
-            'peya_subscriber = car_spraying_robot.peya_subscriber:main'
+            'peya_subscriber = car_spraying_robot.peya_subscriber:main',
         
     ],
 },

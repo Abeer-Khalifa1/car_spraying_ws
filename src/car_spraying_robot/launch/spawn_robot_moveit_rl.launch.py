@@ -364,7 +364,7 @@ def generate_launch_description() -> LaunchDescription:
 
     rl_agent_node = Node(
         package='painting_motion_controller',
-        executable='rl_agent_node.py',
+        executable='rl_agent_node',
         name='rl_agent_node',
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_rl')),

@@ -19,8 +19,12 @@
   <depend>visualization_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <!-- FIX 5: Added missing dependency for Gazebo spawn service -->
   <depend>ros_gz_interfaces</depend>
+  
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+
 
   <test_depend>ament_pep257</test_depend>
   <test_depend>ament_flake8</test_depend>

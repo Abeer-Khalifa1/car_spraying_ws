@@ -107,11 +107,6 @@ install(TARGETS
     DESTINATION lib/${PROJECT_NAME}
 )
 
-install(
-    PROGRAMS
-        src/rl_agent_node.py
-    DESTINATION lib/${PROJECT_NAME}
-)
 
 install(
     PROGRAMS

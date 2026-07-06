@@ -172,7 +172,7 @@ class SpraySimNode(Node):
         standoff = float(msg.data[0])   # metres
         flow     = float(msg.data[1])   # 0-1
 
-        # Safety limits matching square_xz.cpp ranges
+        # Safety limits matching cartesian_trajectory_controller ranges
         new_cone_length = np.clip(standoff, 0.05, 0.50)
 
         # Derive sigma from flow: flow=0 -> tight (0.010), flow=1 -> wide (0.060)
